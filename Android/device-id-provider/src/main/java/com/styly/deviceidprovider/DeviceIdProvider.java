@@ -20,6 +20,7 @@ final public class DeviceIdProvider {
      * Asynchronously obtains the device ID, showing permission or SAF UI if needed.
      */
     public static void getDeviceId(@NonNull Activity activity, @NonNull Callback cb) {
+        Logger.d("DeviceIdProvider.getDeviceId sdk=" + Build.VERSION.SDK_INT);
         if (Build.VERSION.SDK_INT >= 33) {
             cb.onError("E_PLUS_DISABLED", "API 33+ SAF implementation is disabled until instructed.");
         } else {

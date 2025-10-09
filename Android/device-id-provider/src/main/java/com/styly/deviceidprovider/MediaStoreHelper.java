@@ -42,8 +42,10 @@ final class MediaStoreHelper {
                 completePendingIfNeeded(activity.getContentResolver(), uri);
                 cb.onSuccess(newId);
             } catch (SecurityException se) {
+                Logger.e("MediaStore permission error", se);
                 cb.onError("E_PERMISSION", se.getMessage() != null ? se.getMessage() : "Permission required");
             } catch (Throwable t) {
+                Logger.e("MediaStore IO error", t);
                 cb.onError("E_IO", t.getMessage() != null ? t.getMessage() : "I/O error");
             }
         }, cb);
@@ -53,11 +55,12 @@ final class MediaStoreHelper {
     static String peekDeviceId(@NonNull Context context) {
         try {
             Uri existing = findSingle(context.getContentResolver());
-            if (existing == null) return null;
+            if (existing == null) { return null; }
             String id = readGuid(context.getContentResolver(), existing);
             if (TextUtils.isEmpty(id)) return null;
             return id;
         } catch (Throwable ignore) {
+            Logger.e("MediaStore peek failed", ignore);
             return null;
         }
     }

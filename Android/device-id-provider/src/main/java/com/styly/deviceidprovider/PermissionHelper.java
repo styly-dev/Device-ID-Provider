@@ -16,7 +16,8 @@ final class PermissionHelper {
 
     static boolean hasReadExternal(@NonNull Context context) {
         if (Build.VERSION.SDK_INT > 32) return true; // Not applicable
-        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+        int res = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE);
+        return res == PackageManager.PERMISSION_GRANTED;
     }
 
     static void ensureReadExternal(@NonNull Activity activity, @NonNull Runnable onGranted, @NonNull DeviceIdProvider.Callback onDenied) {
@@ -30,4 +31,3 @@ final class PermissionHelper {
         });
     }
 }
-

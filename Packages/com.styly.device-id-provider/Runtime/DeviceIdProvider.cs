@@ -6,7 +6,7 @@ using System.Threading;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
-namespace STYLY.DeviceIdProvider
+namespace Styly.DeviceIdProvider
 {
     /// <summary>
     /// Provides a stable device-wide GUID using a shared PNG in Pictures/Device-ID-Provider/{guid}.png

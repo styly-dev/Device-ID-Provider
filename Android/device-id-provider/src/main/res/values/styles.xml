@@ -1,9 +1,8 @@
 <resources>
-    <style name="Theme.Transparent.NoActionBar" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.Transparent.NoActionBar" parent="@android:style/Theme.Translucent.NoTitleBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>
     </style>
 </resources>
-

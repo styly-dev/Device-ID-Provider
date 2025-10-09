@@ -1,12 +1,13 @@
-# Unity/Android Device ID Provider 仕様（MediaStore / SAF / C#のみ）
+# Unity/Android Device ID Provider 仕様（Android Library: Java + Unity Wrapper）
 
 ## 1. 目的
-- Unity C# のみで Android 端末固有の GUID を生成・保持・共有する仕組みを実装する。
-- API 33+ もサポートしつつ、API 32 以下で確実に動作することを必須要件とする。
+- Unity から利用可能な Android ライブラリ（AAR, Java 実装）として、端末固有の GUID を生成・保持・共有する仕組みを提供する。
+- API 33+ をサポートしつつ、API 32 以下での確実動作を必須要件とする。
 - GUID は JSON を単一ソースとして共有（複数アプリ間で同一値を参照）。
   - API ≤ 32: MediaStore の Downloads コレクション配下に配置。
   - API ≥ 33: SAF（Storage Access Framework）でユーザーが選択したフォルダ/ファイルを用いる。
-- 公開 API は `GetDeviceID()` のみ。初回呼び出し時に JSON が無ければ生成して保存、以後は読み出しを返す。
+- Unity 側は薄い C# ラッパのみ（`AndroidJavaObject` 経由で Java API を呼出）。
+- 公開 API は `GetDeviceID()` 相当（Unity からは非同期コールバックで受領）。
 
 ## 2. 前提・範囲
 - 保存場所: `Download/Device-ID-Provider/device-id-provider.json`（MediaStore `Downloads` コレクションの `RELATIVE_PATH`）。
@@ -16,19 +17,19 @@
   ```
 - GUID 生成: `System.Guid.NewGuid().ToString("D").ToLowerInvariant()`。ファイルが削除されるまで不変。
 - 対象デバイス: Pico / Meta Quest 系（Android ベース）。
-- 実装言語: Unity C# のみ（ネイティブ AAR なし）。Android API は `AndroidJavaObject` / `AndroidJavaClass` で呼び出す。
-- 備考: `Download` はスコープドストレージ配下の共有領域。MediaStore を用いて作成・検索・入出力を行う。
+- 実装言語: Java（Android ライブラリ/AAR）。Unity 側は C# ラッパのみ。
+- 備考: `Download` はスコープドストレージ配下の共有領域。API ≤ 32 は MediaStore、API ≥ 33 は SAF を利用。
 
 ## 3. 動作要件（受け入れ基準）
-- `GetDeviceID()` は常に同じ文字列（当該 JSON の内容）を返す。
-- JSON が存在しない場合、新規 GUID を生成し、保存し、その値を返す。
-- 複数アプリで同一端末・同一 JSON を参照できる。
-  - API ≤ 32: MediaStore 参照で横断可。
-  - API ≥ 33: 各アプリが一度 SAF で同一フォルダ/ファイルをユーザー選択して永続許可を取得すれば横断可。
-- 初回のみのダイアログは許容（ランタイム権限/SAF 選択）。
-- 競合を避け、二重作成を最小化する（後述ロジック）。二重作成が起きた場合でも、以後は先に存在するファイルを参照する。
-- JSON 破損時はエラーログを出しつつ再生成する（新しい GUID を採番して上書き）。
-- 例外（権限未許可、ストレージ不可、I/O エラー等）時は明確なログを出し、`GetDeviceID()` は `null` もしくは例外で呼び出し元に伝播（プロジェクト方針に合わせ選択）。
+- `GetDeviceID()`（Unity 側公開 API）は同一端末で常に同じ ID を返す。
+- JSON が無い場合は新規 GUID を生成・保存し、その値を返す。
+- 複数アプリで同一端末・同一 JSON を参照可能。
+  - API ≤ 32: MediaStore 経由で横断参照。
+  - API ≥ 33: 各アプリが初回に SAF で同一フォルダ/ファイルを選択し永続許可を取得すれば横断参照可。
+- 初回のみのダイアログ（権限/SAF）は許容。
+- 競合を避け二重作成を最小化。二重作成が起きても既存ファイルを以後採用。
+- JSON 破損時はエラーログ出力のうえ再生成（新 GUID を上書き保存）。
+- エラーは明確なコード/メッセージでコールバックへ返却（Unity 側でハンドリング可能）。
 
 ## 4. Android 設計ポイント（API レベル別）
 - 推奨最小 API: 29（Android 10）
@@ -44,7 +45,7 @@
 - MIME: `"application/json"`
 - JSON キー名: `"device-id"`（固定）
 
-## 6. 権限ポリシー
+## 6. 権限・アクティビティ構成
 - API ≤ 32:
   - 読み取り: `READ_EXTERNAL_STORAGE` を初回のみランタイムリクエスト。
   - 書き込み: MediaStore 経由で原則不要（挿入時に付与される）。
@@ -53,43 +54,99 @@
   - SAF を使用（`ACTION_OPEN_DOCUMENT_TREE` でフォルダ選択、または `ACTION_CREATE_DOCUMENT` でファイル作成）。
   - 取得した URI に対して `takePersistableUriPermission` を呼び出し、永続化。
 
-## 7. 実装概要
-- 公開 API: `GetDeviceID()` のみ。
-- API 判定で分岐:
-  - API ≥ 33: SAF の永続 URI を確保（なければダイアログ表示）→ 既存 JSON を探索 → 無ければ作成 → 読み出し/返却。
-  - API ≤ 32: MediaStore 検索 → 無ければ作成 → 読み出し/返却。
-- 競合対策: 先行ファイルを採用。作成中は `IS_PENDING`（API 29–30）を利用。
-- 破損時: エラーログを記録し、新規 GUID を採番して再生成/上書き。
-- エラーハンドリング: ログを明確化し、返却方針（null/例外）は統一。
+推奨 Manifest 例（ライブラリ側）
+```xml
+<manifest>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
 
-## 8. 実装詳細（Android / C# ブリッジ）
+  <application>
+    <!-- SAF ダイアログ専用（透過・内部用） -->
+    <activity
+        android:name="com.styly.deviceidprovider.ui.IdProviderUiActivity"
+        android:exported="false"
+        android:theme="@style/Theme.Transparent.NoActionBar"/>
+  </application>
+</manifest>
+```
+
+## 7. 実装概要（アーキテクチャ）
+- 構成
+  - Java ライブラリ（AAR）: `com.styly.deviceidprovider` パッケージ。
+    - `DeviceIdProvider`（公開ファサード）
+    - `MediaStoreHelper`（API ≤ 32）
+    - `SafHelper`（API ≥ 33）
+    - `PermissionHelper`（権限要求）
+    - `IdProviderUiActivity`（SAF/権限ダイアログ起動・結果受領の透明 Activity）
+  - Unity C# ラッパ: 非同期 `GetDeviceID(Action<string> onSuccess, Action<string,string> onError)` を提供。
+- フロー
+  - API 判定で分岐:
+    - API ≥ 33: 永続 URI を確認 → 無ければ `IdProviderUiActivity` 経由で SAF 表示 → フォルダ/ファイル確保 → 読取/作成。
+    - API ≤ 32: MediaStore 検索 → 無ければ作成（`IS_PENDING` 利用）→ 読取。
+  - キャッシュ: 取得済み ID は `SharedPreferences` とメモリにキャッシュ（I/O 削減、整合性はファイル優先）。
+  - 破損時: ログ出力後に新 GUID を再生成し上書き保存。
+
+## 8. 実装詳細（Java ライブラリ）
+### 公開 API（Java）
+```java
+package com.styly.deviceidprovider;
+
+public final class DeviceIdProvider {
+  public interface Callback {
+    void onSuccess(String deviceId);
+    void onError(String code, String message);
+  }
+
+  // 非同期。必要に応じて権限/SAF を表示し、完了後にコールバック。
+  public static void getDeviceId(@NonNull Activity activity, @NonNull Callback cb) { /* ... */ }
+
+  // 事前に SAF の永続 URI を設定済みであれば同期取得も可能（キャッシュ優先、未整備なら null）。
+  @Nullable public static String getDeviceIdIfReady(@NonNull Context context) { /* ... */ return null; }
+}
+```
+
 ### MediaStore（API ≤ 32）
-- ユーティリティ（例: `AndroidBridge.cs`）
-  - SDK, Activity, ContentResolver の取得。
-  - MediaStore `Downloads` の `contentUri` 取得。
-  - `Query`/`Insert`/`Update`/`openInputStream`/`openOutputStream` ラッパ。
-  - JSON シリアライズ（`JsonUtility` もしくは `System.Text.Json` 相当）。
-- DTO
-  ```csharp
-  class DeviceIdDto { public string device_id; }
-  ```
-  （JSON は `device-id` キー。シリアライザでカスタム名に対応）
-- 検索ロジック（`FindExisting()`）
-  - `RELATIVE_PATH = "Download/Device-ID-Provider/"` かつ `DISPLAY_NAME = "device-id-provider.json"` を条件にクエリ。
-  - 先頭 1 件の `contentUri` を返す（複数あっても 1 件採用）。
-- 読取ロジック（`TryReadGuid(Uri uri, out string guid)`）
-  - `openInputStream` → UTF-8 読み込み → JSON 解析 → `device-id` を抽出。
-- 作成ロジック（`CreateAndWrite()`）
-  - GUID 生成 → `insert()`（API 29–30 は `IS_PENDING=1` 付与）→ JSON 書き込み → 必要に応じ `IS_PENDING=0` 更新 → URI 返却。
-- 公開 API（`GetDeviceID()`）
-  - パーミッション確認（必要な場合のみ要求）→ `FindExisting()` → あれば `TryReadGuid()`、無ければ `CreateAndWrite()`。
-  - 失敗時のログ・例外取り扱いを統一。
-- スレッド安全性
-  - アプリ内多重呼び出しに対して `lock` でガード。
-- フォールバック（API < 29）
-  - `Download` 直下に `Device-ID-Provider` フォルダを `File` で作成し、同名 JSON を I/O。
-- デモ
-  - `Demo.scene` にボタン（`GetDeviceID`）と結果表示 Text。
+- `RELATIVE_PATH = "Download/Device-ID-Provider/"`、`DISPLAY_NAME = "device-id-provider.json"` でクエリ。
+- 既存があれば UTF-8 読み込み → JSON 解析 → `device-id`。破損時は再生成して上書き。
+- 不在なら新規 GUID 生成 → `IS_PENDING=1` で挿入（API 29–30）→ JSON 書込み → `IS_PENDING=0` に更新。
+- 例外は `code`（例: `E_PERMISSION`, `E_IO`, `E_JSON`）付きでコールバック。
+
+擬似コード（抜粋）
+```java
+Uri existing = MediaStoreHelper.findSingle(resolver, FOLDER, FILE);
+if (existing != null) {
+  String id = tryReadGuid(resolver, existing); // may return null on corruption
+  if (id != null) return success(id);
+  // corruption: fall-through to regenerate
+}
+String newId = newGuid();
+Uri uri = MediaStoreHelper.insertJson(resolver, FOLDER, FILE, /*pending=*/true);
+writeJson(resolver, uri, jsonFor(newId));
+MediaStoreHelper.completePendingIfNeeded(resolver, uri);
+return success(newId);
+```
+
+### SAF（API ≥ 33）
+- 初回に `ACTION_OPEN_DOCUMENT_TREE`（推奨）でフォルダを選択、`takePersistableUriPermission` で永続化。
+- 選択フォルダ直下に `device-id-provider.json` を `DocumentFile` で探索/作成。
+- 読み込み失敗（破損）時はログ出力後に新規 GUID を再生成して上書き。
+- ライフサイクルは透明 `IdProviderUiActivity` が担当（結果を静的レジストリ経由で `Callback` に返却）。
+
+擬似コード（抜粋）
+```java
+Uri tree = SafHelper.ensureTreeUri(activity); // may show UI once
+DocumentFile dir = DocumentFile.fromTreeUri(activity, tree);
+DocumentFile file = SafHelper.findOrCreate(dir, FILE, "application/json");
+String id = tryReadGuid(activity.getContentResolver(), file.getUri());
+if (id == null) {
+  id = newGuid();
+  writeJson(activity.getContentResolver(), file.getUri(), jsonFor(id));
+}
+return success(id);
+```
+
+### 共有（API ≥ 33）
+- 各アプリが同一フォルダを選択すれば同一ファイルを共有可能。
+- 選択ミスによる分岐を避けるため、UI 文言で `Download/Device-ID-Provider/` を推奨選択として案内。
 
 ### SAF（API ≥ 33）
 - ユーティリティ（例: `SafBridge.cs`）
@@ -126,47 +183,17 @@
 実際の JNI 呼び出し・ストリーム処理はプロジェクトのユーティリティに合わせて実装する。
 
 ```csharp
-public static class DeviceIdProvider
+// Unity C# ラッパ（概要）
+public static class DeviceIdProviderUnity
 {
-    const string Folder = "Download/Device-ID-Provider/";
-    const string FileName = "device-id-provider.json";
-
-    public static string GetDeviceID()
+    public static void GetDeviceID(Action<string> onSuccess, Action<string,string> onError)
     {
-        if (Application.platform != RuntimePlatform.Android)
-            return null; // 要件外
+        using var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+        using var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
+        using var cls = new AndroidJavaClass("com.styly.deviceidprovider.DeviceIdProvider");
 
-        if (AndroidBridge.SdkInt >= 33)
-        {
-            // SAF フロー（初回のみダイアログ許容）
-            var uri = SafBridge.EnsureDocumentUri(Folder, FileName); // ツリー URI の永続化＋ファイル取得/作成
-            if (SafBridge.TryReadGuid(uri, out var guid))
-                return guid;
-
-            // 破損時は再生成
-            var newGuid = System.Guid.NewGuid().ToString("D").ToLowerInvariant();
-            SafBridge.WriteJson(uri, $"{{\"device-id\":\"{newGuid}\"}}\n");
-            return newGuid;
-        }
-        else
-        {
-            // MediaStore フロー（API ≤ 32）
-            using var activity = AndroidBridge.GetActivity();
-            using var resolver = AndroidBridge.GetContentResolver(activity);
-            using var downloads = AndroidBridge.GetDownloadsUri();
-
-            AndroidBridge.EnsurePermissions(); // READ_EXTERNAL_STORAGE など（初回のみ）
-
-            var existing = AndroidBridge.QuerySingle(resolver, downloads, FileName, Folder);
-            if (existing != null && AndroidBridge.TryReadGuid(resolver, existing, out var guid))
-                return guid;
-
-            var newGuid = System.Guid.NewGuid().ToString("D").ToLowerInvariant();
-            var newUri = AndroidBridge.InsertJsonFile(resolver, downloads, FileName, Folder, pending: true);
-            AndroidBridge.WriteJson(resolver, newUri, $"{{\"device-id\":\"{newGuid}\"}}\n");
-            AndroidBridge.CompletePendingIfNeeded(resolver, newUri);
-            return newGuid;
-        }
+        var callback = new DeviceIdCallbackProxy(onSuccess, onError); // AndroidJavaProxy 実装で Java の Callback を受ける
+        cls.CallStatic("getDeviceId", activity, callback);
     }
 }
 ```
@@ -179,8 +206,11 @@ public static class DeviceIdProvider
 - 名称固定: フォルダ `Device-ID-Provider`、ファイル `device-id-provider.json`、キー名 `"device-id"`。
 
 ## 13. 納品物
-- `DeviceIdProvider.cs`（公開 API 実装）
-- `AndroidBridge.cs`（JNI ユーティリティ）
-- `Demo.scene`（ボタン・テキストで動作デモ）
-- `README.md`（ビルド設定、Manifest 権限、既知の制約）
+- Android ライブラリ（AAR）: `com.styly.deviceidprovider`
+  - Java ソース: `DeviceIdProvider.java`, `MediaStoreHelper.java`, `SafHelper.java`, `PermissionHelper.java`, `IdProviderUiActivity.java`
+  - `AndroidManifest.xml`（上記 Activity, 権限, テーマ）
+  - `build.gradle`（minSdk 29, targetSdk 最新推奨）
+- Unity C# ラッパ: `DeviceIdProviderUnity.cs`（`GetDeviceID` 非同期 API）
+- サンプル: `Demo.scene`（ボタン・テキストで動作デモ）
+- README.md（導入手順、AAR 配置 `Assets/Plugins/Android/`、必要設定、既知の制約）
 - テスト観点チェックリスト（本書「9. 動作確認チェックリスト」）

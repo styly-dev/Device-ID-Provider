@@ -9,7 +9,7 @@ import android.provider.DocumentsContract;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.styly.deviceidprovider.SafHelper;
+// No direct dependency on SafHelper; Plus (SAF) path may be disabled.
 
 /** Transparent activity to run SAF flows and return results to static callback. */
 public class IdProviderUiActivity extends Activity {

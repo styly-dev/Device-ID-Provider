@@ -13,6 +13,7 @@ import android.text.TextUtils;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.documentfile.provider.DocumentFile;
+import com.styly.deviceidprovider.ui.IdProviderUiActivity;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -137,4 +138,3 @@ final class SafHelper {
         return "{\"device-id\":\"" + id + "\"}\n";
     }
 }
-

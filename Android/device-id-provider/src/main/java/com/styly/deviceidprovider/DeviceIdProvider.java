@@ -32,10 +32,7 @@ final public class DeviceIdProvider {
      */
     @Nullable
     public static String getDeviceIdIfReady(@NonNull Context context) {
-        if (Build.VERSION.SDK_INT >= 33) {
-            return null; // Plus path disabled
-        } else {
-            return MediaStoreHelper.peekDeviceId(context);
-        }
+        if (Build.VERSION.SDK_INT >= 33) return null; // Plus path disabled
+        return MediaStoreHelper.peekDeviceId(context);
     }
 }

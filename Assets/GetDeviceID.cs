@@ -1,4 +1,4 @@
-using STYLY.DeviceIdProvider;
+using Styly.DeviceIdProvider;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;

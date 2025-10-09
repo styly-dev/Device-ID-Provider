@@ -1,7 +1,7 @@
 #if UNITY_2018_4_OR_NEWER
 using System;
 
-namespace STYLY.DeviceIdProvider
+namespace Styly.DeviceIdProvider
 {
     internal static class Png1x1
     {

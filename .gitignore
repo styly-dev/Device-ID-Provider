@@ -126,3 +126,5 @@ ContentPackages/com.unity.xr-content.xr-sim-environments-*.tgz
 .mcp.json
 .serena/*
 **/.serena/*
+.utmp
+Device-ID-Provider_BurstDebugInformation_DoNotShip

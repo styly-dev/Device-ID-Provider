@@ -9,4 +9,4 @@ Quick start
 
 Notes
 - API ≤ 32: Uses MediaStore (Downloads) with `RELATIVE_PATH="Download/Device-ID-Provider/"`.
-- API ≥ 33: Uses SAF; first call will show a folder picker to persist access.
+- API ≥ 33: Plus (SAF) path is currently disabled and returns `E_PLUS_DISABLED` until enabled by instruction. See `Spec/spec_plus.md`.

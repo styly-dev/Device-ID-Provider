@@ -21,7 +21,7 @@ final public class DeviceIdProvider {
      */
     public static void getDeviceId(@NonNull Activity activity, @NonNull Callback cb) {
         if (Build.VERSION.SDK_INT >= 33) {
-            SafHelper.getOrCreateDeviceId(activity, cb);
+            cb.onError("E_PLUS_DISABLED", "API 33+ SAF implementation is disabled until instructed.");
         } else {
             MediaStoreHelper.getOrCreateDeviceId(activity, cb);
         }
@@ -33,10 +33,9 @@ final public class DeviceIdProvider {
     @Nullable
     public static String getDeviceIdIfReady(@NonNull Context context) {
         if (Build.VERSION.SDK_INT >= 33) {
-            return SafHelper.peekDeviceId(context);
+            return null; // Plus path disabled
         } else {
             return MediaStoreHelper.peekDeviceId(context);
         }
     }
 }
-

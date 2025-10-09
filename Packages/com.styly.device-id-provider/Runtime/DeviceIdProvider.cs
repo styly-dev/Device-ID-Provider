@@ -2,25 +2,27 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
 namespace STYLY.DeviceIdProvider
 {
     /// <summary>
-    /// Provides a stable device-wide GUID using a shared PNG in Downloads/Device-ID-Provider/{guid}.png
+    /// Provides a stable device-wide GUID using a shared PNG in Pictures/Device-ID-Provider/{guid}.png
     /// Android only. Throws on errors per spec.
     /// </summary>
     public static class DeviceIdProvider
     {
-        private const string ImagesRelativePath = "Pictures/Device-ID-Provider/"; // Note: no leading slash, trailing slash required for MediaStore
-        private const string FolderName = "Device-ID-Provider"; // for legacy (<29)
+        // MediaStore.Images の RELATIVE_PATH として利用（先頭スラッシュなし・末尾スラッシュあり）
+        private const string ImagesRelativePath = "Pictures/Device-ID-Provider/";
+        private const string FolderName = "Device-ID-Provider"; // legacy (<29) の実フォルダ名
         private const string PngMime = "image/png";
         private static readonly Regex GuidPngRegex = new Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.png$", RegexOptions.Compiled);
         private static readonly object _lock = new object();
 
         /// <summary>
-        /// Returns a stable GUID for the device, stored as a 1x1 PNG filename in shared Downloads.
+        /// Returns a stable GUID for the device, stored as a 1x1 PNG filename in shared storage.
         /// Throws on permission/IO/policy errors. Thread-safe within-process.
         /// </summary>
         public static string GetDeviceID()
@@ -67,11 +69,9 @@ namespace STYLY.DeviceIdProvider
 #if UNITY_ANDROID && !UNITY_EDITOR
         private static void EnsurePermissionsOrThrow(int sdk)
         {
-            // Unity permission helper works only on main thread; assume API caller runs on main thread as per typical Unity usage.
-            // If permission already granted, this is a no-op.
+            // Unity の Permission API は通常メインスレッドから呼ぶ前提
             bool needRead = false, needWrite = false, needReadImages = false;
 
-            // Distinguish by both device OS and app target SDK to choose the correct runtime permission model
             int target = AndroidBridge.GetTargetSdkInt();
             if (sdk <= 28)
             {
@@ -85,11 +85,11 @@ namespace STYLY.DeviceIdProvider
             {
                 if (target >= 33)
                 {
-                    needReadImages = true; // Android 13+ permission model for apps targeting 33+
+                    needReadImages = true; // T+ で target 33+ の場合
                 }
                 else
                 {
-                    // Back-compat path: apps targeting <=32 on Android 13+ still rely on READ_EXTERNAL_STORAGE
+                    // target <=32 の後方互換
                     needRead = true;
                 }
             }
@@ -99,48 +99,22 @@ namespace STYLY.DeviceIdProvider
                 if (needRead)
                 {
                     var perm = "android.permission.READ_EXTERNAL_STORAGE";
-                    if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(perm))
-                    {
-                        UnityEngine.Android.Permission.RequestUserPermission(perm);
-                    }
-                    if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(perm))
-                    {
-                        // On Android 13+ the platform may surface/grant READ_MEDIA_IMAGES instead.
-                        if (sdk >= 33 && UnityEngine.Android.Permission.HasUserAuthorizedPermission("android.permission.READ_MEDIA_IMAGES"))
-                        {
-                            // treat as granted
-                        }
-                        else
-                        {
-                            throw new UnauthorizedAccessException("READ_EXTERNAL_STORAGE permission not granted");
-                        }
-                    }
+                    if (!RequestAndWaitForPermission(perm, altGrantedChecker: () => (sdk >= 33 && UnityEngine.Android.Permission.HasUserAuthorizedPermission("android.permission.READ_MEDIA_IMAGES"))))
+                        throw new UnauthorizedAccessException("READ_EXTERNAL_STORAGE permission not granted");
                 }
 
                 if (needWrite)
                 {
                     var perm = "android.permission.WRITE_EXTERNAL_STORAGE";
-                    if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(perm))
-                    {
-                        UnityEngine.Android.Permission.RequestUserPermission(perm);
-                    }
-                    if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(perm))
+                    if (!RequestAndWaitForPermission(perm))
                         throw new UnauthorizedAccessException("WRITE_EXTERNAL_STORAGE permission not granted");
                 }
 
                 if (needReadImages)
                 {
                     var perm = "android.permission.READ_MEDIA_IMAGES";
-                    if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(perm))
-                    {
-                        UnityEngine.Android.Permission.RequestUserPermission(perm);
-                    }
-                    // On some combinations, requesting READ_MEDIA_IMAGES might be ignored; accept READ_EXTERNAL_STORAGE if it's granted.
-                    if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(perm))
-                    {
-                        if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission("android.permission.READ_EXTERNAL_STORAGE"))
-                            throw new UnauthorizedAccessException("READ_MEDIA_IMAGES permission not granted");
-                    }
+                    if (!RequestAndWaitForPermission(perm, altGrantedChecker: () => UnityEngine.Android.Permission.HasUserAuthorizedPermission("android.permission.READ_EXTERNAL_STORAGE")))
+                        throw new UnauthorizedAccessException("READ_MEDIA_IMAGES permission not granted");
                 }
             }
             catch (Exception ex)
@@ -150,12 +124,52 @@ namespace STYLY.DeviceIdProvider
             }
         }
 
+        /// <summary>
+        /// Request the given permission if not yet granted, and synchronously wait for the user response
+        /// by polling for a short, bounded time. Returns true if granted (or altGrantedChecker returns true).
+        /// </summary>
+        private static bool RequestAndWaitForPermission(string permission, Func<bool> altGrantedChecker = null, int timeoutMs = 15000)
+        {
+            try
+            {
+                if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
+                    return true;
+                if (altGrantedChecker != null && altGrantedChecker())
+                    return true;
+
+                UnityEngine.Android.Permission.RequestUserPermission(permission);
+
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < timeoutMs)
+                {
+                    if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
+                        return true;
+                    if (altGrantedChecker != null && altGrantedChecker())
+                        return true;
+
+                    Thread.Sleep(100); // ダイアログ待ち
+                }
+
+                // Final check
+                if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
+                    return true;
+                if (altGrantedChecker != null && altGrantedChecker())
+                    return true;
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static (bool success, string guid) MediaStore_FindOldestMatchingPng()
         {
             var resolver = AndroidBridge.GetContentResolver();
             var images = AndroidBridge.GetImagesExternalContentUri();
 
-            // Build query: RELATIVE_PATH LIKE 'Download/Device-ID-Provider/%' AND _display_name LIKE '%.png'
+            // RELATIVE_PATH LIKE 'Pictures/Device-ID-Provider/%' AND _display_name LIKE '%.png'
             string[] projection = { "_id", "_display_name", "date_added", "relative_path" };
             string selection;
             string[] selectionArgs;
@@ -168,7 +182,6 @@ namespace STYLY.DeviceIdProvider
             }
             else
             {
-                // Not used for <29 path, but keep for completeness
                 selection = "_display_name LIKE ?";
                 selectionArgs = new[] { "%.png" };
             }
@@ -178,7 +191,6 @@ namespace STYLY.DeviceIdProvider
                 if (cursor == null)
                     throw new IOException("MediaStore query returned null cursor");
 
-                int idxId = AndroidBridge.CursorGetColumnIndex(cursor, "_id");
                 int idxName = AndroidBridge.CursorGetColumnIndex(cursor, "_display_name");
 
                 if (AndroidBridge.CursorMoveToFirst(cursor))
@@ -188,9 +200,8 @@ namespace STYLY.DeviceIdProvider
                         string name = AndroidBridge.CursorGetString(cursor, idxName);
                         if (string.IsNullOrEmpty(name)) continue;
                         if (!GuidPngRegex.IsMatch(name))
-                        {
                             throw new InvalidDataException($"Found PNG in target folder but filename not GUID: {name}");
-                        }
+
                         string guid = name.Substring(0, name.Length - 4);
                         return (true, guid);
                     } while (AndroidBridge.CursorMoveToNext(cursor));
@@ -213,10 +224,9 @@ namespace STYLY.DeviceIdProvider
 
             int sdk = AndroidBridge.GetSdkInt();
             bool needsPending = sdk >= 29 && sdk <= 30; // Android 10-11
+
             if (needsPending)
-            {
                 values.Call("put", "is_pending", 1);
-            }
 
             AndroidJavaObject uri = null;
             try
@@ -254,7 +264,7 @@ namespace STYLY.DeviceIdProvider
 
         private static string Legacy_GetOrCreate_InDownloads()
         {
-            // Get /storage/emulated/0/Download/Device-ID-Provider
+            // /storage/emulated/0/Download/Device-ID-Provider
             string downloadsPath = AndroidBridge.GetDownloadsAbsolutePath();
             if (string.IsNullOrEmpty(downloadsPath))
                 throw new IOException("Unable to determine external Downloads directory");
@@ -296,4 +306,4 @@ namespace STYLY.DeviceIdProvider
 #endif // UNITY_ANDROID && !UNITY_EDITOR
     }
 }
-#endif
+#endif // UNITY_2018_4_OR_NEWER

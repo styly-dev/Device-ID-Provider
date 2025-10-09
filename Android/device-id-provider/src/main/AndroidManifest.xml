@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.styly.deviceidprovider">
+
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+
+    <application>
+        <activity
+            android:name="com.styly.deviceidprovider.ui.IdProviderUiActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Transparent.NoActionBar" />
+    </application>
+</manifest>
+

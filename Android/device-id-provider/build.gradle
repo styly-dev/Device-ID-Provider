@@ -1,0 +1,31 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.styly.deviceidprovider'
+    compileSdkVersion 34
+
+    defaultConfig {
+        minSdkVersion 29
+        targetSdkVersion 34
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.activity:activity:1.9.2'
+    implementation 'androidx.documentfile:documentfile:1.0.1'
+}
+

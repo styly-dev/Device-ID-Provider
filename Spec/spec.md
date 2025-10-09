@@ -1,42 +1,19 @@
-# Unity/Android Device ID Provider 仕様（Android Library: Java + Unity Wrapper）
+# Device ID Provider 仕様インデックス
 
-## 1. 目的
-- Unity から利用可能な Android ライブラリ（AAR, Java 実装）として、端末固有の GUID を生成・保持・共有する仕組みを提供する。
-- API 33+ をサポートしつつ、API 32 以下での確実動作を必須要件とする。
-- GUID は JSON を単一ソースとして共有（複数アプリ間で同一値を参照）。
-  - API ≤ 32: MediaStore の Downloads コレクション配下に配置。
-  - API ≥ 33: SAF（Storage Access Framework）でユーザーが選択したフォルダ/ファイルを用いる。
-- Unity 側は薄い C# ラッパのみ（`AndroidJavaObject` 経由で Java API を呼出）。
-- 公開 API は `GetDeviceID()` 相当（Unity からは非同期コールバックで受領）。
+このプロジェクトの仕様は API レベル別に 2 ファイルへ分割されています。詳細は各ファイルを参照してください。
 
-## 2. 前提・範囲
-- 保存場所: `Download/Device-ID-Provider/device-id-provider.json`（MediaStore `Downloads` コレクションの `RELATIVE_PATH`）。
-- JSON 形式:
-  ```json
-  { "device-id": "<guid-lowercase-hyphenated>" }
-  ```
-- GUID 生成: `System.Guid.NewGuid().ToString("D").ToLowerInvariant()`。ファイルが削除されるまで不変。
-- 対象デバイス: Pico / Meta Quest 系（Android ベース）。
-- 実装言語: Java（Android ライブラリ/AAR）。Unity 側は C# ラッパのみ。
-- 備考: `Download` はスコープドストレージ配下の共有領域。API ≤ 32 は MediaStore、API ≥ 33 は SAF を利用。
+- Base（API ≤ 32, MediaStore）: `Spec/spec_base.md`
+- Plus（API ≥ 33, SAF）: `Spec/spec_plus.md`
 
-## 3. 動作要件（受け入れ基準）
-- `GetDeviceID()`（Unity 側公開 API）は同一端末で常に同じ ID を返す。
-- JSON が無い場合は新規 GUID を生成・保存し、その値を返す。
-- 複数アプリで同一端末・同一 JSON を参照可能。
-  - API ≤ 32: MediaStore 経由で横断参照。
-  - API ≥ 33: 各アプリが初回に SAF で同一フォルダ/ファイルを選択し永続許可を取得すれば横断参照可。
-- 初回のみのダイアログ（権限/SAF）は許容。
-- 競合を避け二重作成を最小化。二重作成が起きても既存ファイルを以後採用。
-- JSON 破損時はエラーログ出力のうえ再生成（新 GUID を上書き保存）。
-- エラーは明確なコード/メッセージでコールバックへ返却（Unity 側でハンドリング可能）。
+概要
+- 両仕様とも「JSON ファイルに保存した GUID を複数アプリで共有する」ことを目的とします。
+- 実装は Android ライブラリ（Java, AAR）＋ Unity C# ラッパの構成。
+- Base は MediaStore（Downloads）を利用して確実動作を優先。
+- Plus は SAF を利用し、初回のみユーザー操作（フォルダ選択）で永続権限を確保します。
 
-## 4. Android 設計ポイント（API レベル別）
-- 推奨最小 API: 29（Android 10）
-- 実運用ターゲット: API 29–32 は MediaStore で確実動作。
-- API 33+（Android 13+）: JSON は `READ_MEDIA_*` の対象外のため、横断参照には SAF を用いる。
-  - 設計方針: 初回のみ SAF ダイアログ（許容済）でユーザーがフォルダ（推奨: `Download/Device-ID-Provider/`）またはファイルを選択 → `takePersistableUriPermission` で永続化 → 以後は無人で I/O。
-  - 既存運用との整合: API 32 以下で生成済みの JSON がある場合、ユーザーに同一フォルダを選んでもらうことで同一ファイルを継続利用可能。
+参照
+- 実装スケルトン: `Android/device-id-provider/`
+- Unity ラッパ API: `Packages/com.styly.device-id-provider/Runtime/DeviceIdProviderUnity.cs`
 
 ## 5. 保存場所・フォーマット
 - MediaStore コレクション: `MediaStore.Downloads`

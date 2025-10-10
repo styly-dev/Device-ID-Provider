@@ -1,7 +1,6 @@
 #if UNITY_2018_4_OR_NEWER
 using System;
 using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Text.RegularExpressions;
 using UnityEngine;
@@ -14,9 +13,8 @@ namespace Styly.DeviceIdProvider
     /// </summary>
     public static class DeviceIdProvider
     {
-        // MediaStore.Images の RELATIVE_PATH として利用（先頭スラッシュなし・末尾スラッシュあり）
+        // For MediaStore.Images RELATIVE_PATH (no leading slash, trailing slash required)
         private const string ImagesRelativePath = "Pictures/Device-ID-Provider/";
-        private const string FolderName = "Device-ID-Provider"; // legacy (<29) の実フォルダ名
         private const string PngMime = "image/png";
         private static readonly Regex GuidPngRegex = new Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.png$", RegexOptions.Compiled);
         private static readonly object _lock = new object();
@@ -27,34 +25,36 @@ namespace Styly.DeviceIdProvider
         /// </summary>
         public static string GetDeviceID()
         {
-#if !UNITY_ANDROID || UNITY_EDITOR
-            throw new PlatformNotSupportedException("DeviceIdProvider.GetDeviceID is supported on Android runtime only");
-#else
+            if (Application.isEditor || Application.platform != RuntimePlatform.Android)
+                throw new PlatformNotSupportedException("DeviceIdProvider.GetDeviceID is supported on Android runtime only");
+
             lock (_lock)
             {
                 int sdk = AndroidBridge.GetSdkInt();
+
+                if (sdk < 29)
+                {
+                    throw new NotSupportedException("This implementation requires Android API 29+.");
+                }
+
                 EnsurePermissionsOrThrow(sdk);
 
                 try
                 {
-                    if (sdk <= 28)
-                        return Legacy_GetOrCreate_InDownloads();
-
                     // API 29+ via MediaStore.Images
                     var existing = MediaStore_FindOldestMatchingPng();
                     if (existing.success)
                         return existing.guid;
 
-                    // None found: create
+                    // Not found -> create a new GUID entry
                     var createdGuid = Guid.NewGuid().ToString("D").ToLowerInvariant();
                     MediaStore_CreatePng(createdGuid);
 
-                    // Re-query to minimize double creation
+                    // Re-query to minimize races; converge on the oldest entry
                     var after = MediaStore_FindOldestMatchingPng();
                     if (after.success)
                         return after.guid;
 
-                    // If still not found, that's an error
                     throw new IOException("Failed to create and locate device ID PNG via MediaStore");
                 }
                 catch (Exception ex)
@@ -63,58 +63,25 @@ namespace Styly.DeviceIdProvider
                     throw;
                 }
             }
-#endif
         }
 
-#if UNITY_ANDROID && !UNITY_EDITOR
+
         private static void EnsurePermissionsOrThrow(int sdk)
         {
-            // Unity の Permission API は通常メインスレッドから呼ぶ前提
-            bool needRead = false, needWrite = false, needReadImages = false;
-
-            int target = AndroidBridge.GetTargetSdkInt();
-            if (sdk <= 28)
-            {
-                needRead = true; needWrite = true;
-            }
-            else if (sdk <= 32)
-            {
-                needRead = true;
-            }
-            else // sdk >= 33
-            {
-                if (target >= 33)
-                {
-                    needReadImages = true; // T+ で target 33+ の場合
-                }
-                else
-                {
-                    // target <=32 の後方互換
-                    needRead = true;
-                }
-            }
-
             try
             {
-                if (needRead)
+                if (sdk <= 32)
                 {
-                    var perm = "android.permission.READ_EXTERNAL_STORAGE";
-                    if (!RequestAndWaitForPermission(perm, altGrantedChecker: () => (sdk >= 33 && UnityEngine.Android.Permission.HasUserAuthorizedPermission("android.permission.READ_MEDIA_IMAGES"))))
-                        throw new UnauthorizedAccessException("READ_EXTERNAL_STORAGE permission not granted");
+                    // SDK <= 32 uses READ_EXTERNAL_STORAGE
+                    Require("android.permission.READ_EXTERNAL_STORAGE");
                 }
-
-                if (needWrite)
+                else // 33+
                 {
-                    var perm = "android.permission.WRITE_EXTERNAL_STORAGE";
-                    if (!RequestAndWaitForPermission(perm))
-                        throw new UnauthorizedAccessException("WRITE_EXTERNAL_STORAGE permission not granted");
-                }
-
-                if (needReadImages)
-                {
-                    var perm = "android.permission.READ_MEDIA_IMAGES";
-                    if (!RequestAndWaitForPermission(perm, altGrantedChecker: () => UnityEngine.Android.Permission.HasUserAuthorizedPermission("android.permission.READ_EXTERNAL_STORAGE")))
-                        throw new UnauthorizedAccessException("READ_MEDIA_IMAGES permission not granted");
+                    // API 33+ uses READ_MEDIA_IMAGES
+                    if (!RequestAndWaitForPermission("android.permission.READ_MEDIA_IMAGES"))
+                    {
+                        throw new UnauthorizedAccessException("Images permission not granted");
+                    }
                 }
             }
             catch (Exception ex)
@@ -124,9 +91,15 @@ namespace Styly.DeviceIdProvider
             }
         }
 
+        private static void Require(string permission)
+        {
+            if (!RequestAndWaitForPermission(permission))
+                throw new UnauthorizedAccessException($"{permission} not granted");
+        }
+
         /// <summary>
-        /// Request the given permission if not yet granted, and synchronously wait for the user response
-        /// by polling for a short, bounded time. Returns true if granted (or altGrantedChecker returns true).
+        /// If the permission is missing, request it and poll for a limited time.
+        /// Returns true if granted. If altGrantedChecker returns true, it is also treated as granted.
         /// </summary>
         private static bool RequestAndWaitForPermission(string permission, Func<bool> altGrantedChecker = null, int timeoutMs = 15000)
         {
@@ -147,7 +120,7 @@ namespace Styly.DeviceIdProvider
                     if (altGrantedChecker != null && altGrantedChecker())
                         return true;
 
-                    Thread.Sleep(100); // ダイアログ待ち
+                    Thread.Sleep(100);
                 }
 
                 // Final check
@@ -170,21 +143,10 @@ namespace Styly.DeviceIdProvider
             var images = AndroidBridge.GetImagesExternalContentUri();
 
             // RELATIVE_PATH LIKE 'Pictures/Device-ID-Provider/%' AND _display_name LIKE '%.png'
-            string[] projection = { "_id", "_display_name", "date_added", "relative_path" };
-            string selection;
-            string[] selectionArgs;
-
-            int sdk = AndroidBridge.GetSdkInt();
-            if (sdk >= 29)
-            {
-                selection = "relative_path LIKE ? AND _display_name LIKE ?";
-                selectionArgs = new[] { ImagesRelativePath + "%", "%.png" };
-            }
-            else
-            {
-                selection = "_display_name LIKE ?";
-                selectionArgs = new[] { "%.png" };
-            }
+            // Sort by date_added ASC (pick the oldest)
+            string[] projection = { "_display_name" };
+            const string selection = "relative_path LIKE ? AND _display_name LIKE ?";
+            string[] selectionArgs = { ImagesRelativePath + "%", "%.png" };
 
             using (var cursor = resolver.Call<AndroidJavaObject>("query", images, projection, selection, selectionArgs, "date_added ASC"))
             {
@@ -199,11 +161,12 @@ namespace Styly.DeviceIdProvider
                     {
                         string name = AndroidBridge.CursorGetString(cursor, idxName);
                         if (string.IsNullOrEmpty(name)) continue;
-                        if (!GuidPngRegex.IsMatch(name))
-                            throw new InvalidDataException($"Found PNG in target folder but filename not GUID: {name}");
-
-                        string guid = name.Substring(0, name.Length - 4);
-                        return (true, guid);
+                        if (GuidPngRegex.IsMatch(name))
+                        {
+                            string guid = name.Substring(0, name.Length - 4);
+                            return (true, guid);
+                        }
+                        // Skip PNGs that are not GUID-named
                     } while (AndroidBridge.CursorMoveToNext(cursor));
                 }
             }
@@ -253,7 +216,7 @@ namespace Styly.DeviceIdProvider
             }
             catch
             {
-                // Best effort cleanup if insert succeeded but writing failed
+                // Best-effort cleanup on write failure
                 if (uri != null)
                 {
                     try { resolver.Call<int>("delete", uri, null, null); } catch { /* ignore */ }
@@ -261,49 +224,6 @@ namespace Styly.DeviceIdProvider
                 throw;
             }
         }
-
-        private static string Legacy_GetOrCreate_InDownloads()
-        {
-            // /storage/emulated/0/Download/Device-ID-Provider
-            string downloadsPath = AndroidBridge.GetDownloadsAbsolutePath();
-            if (string.IsNullOrEmpty(downloadsPath))
-                throw new IOException("Unable to determine external Downloads directory");
-
-            string folder = Path.Combine(downloadsPath, FolderName);
-            Directory.CreateDirectory(folder);
-
-            // Find existing *.png and pick oldest
-            var files = Directory.GetFiles(folder, "*.png");
-            if (files.Length > 0)
-            {
-                var fi = files.Select(p => new FileInfo(p))
-                    .OrderBy(f => f.CreationTimeUtc != DateTime.MinValue ? f.CreationTimeUtc : f.LastWriteTimeUtc)
-                    .First();
-                var name = fi.Name; // includes extension
-                if (!GuidPngRegex.IsMatch(name))
-                    throw new InvalidDataException($"Found PNG in target folder but filename not GUID: {name}");
-                return name.Substring(0, name.Length - 4);
-            }
-
-            // Create new
-            string guid = Guid.NewGuid().ToString("D").ToLowerInvariant();
-            string path = Path.Combine(folder, guid + ".png");
-            File.WriteAllBytes(path, Png1x1.Bytes);
-
-            // After create, re-scan to minimize duplicates
-            files = Directory.GetFiles(folder, "*.png");
-            if (files.Length == 0)
-                throw new IOException("Failed to create device ID PNG in legacy path");
-
-            var chosen = files.Select(p => new FileInfo(p))
-                .OrderBy(f => f.CreationTimeUtc != DateTime.MinValue ? f.CreationTimeUtc : f.LastWriteTimeUtc)
-                .First();
-            var chosenName = chosen.Name;
-            if (!GuidPngRegex.IsMatch(chosenName))
-                throw new InvalidDataException($"Found PNG in target folder but filename not GUID: {chosenName}");
-            return chosenName.Substring(0, chosenName.Length - 4);
-        }
-#endif // UNITY_ANDROID && !UNITY_EDITOR
     }
 }
-#endif // UNITY_2018_4_OR_NEWER
+#endif

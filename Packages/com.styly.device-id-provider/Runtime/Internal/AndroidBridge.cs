@@ -1,4 +1,3 @@
-#if UNITY_ANDROID && !UNITY_EDITOR
 using System;
 using UnityEngine;
 
@@ -80,18 +79,5 @@ namespace Styly.DeviceIdProvider
         {
             outputStream.Call("write", buffer, offset, length);
         }
-
-        public static string GetDownloadsAbsolutePath()
-        {
-            using (var env = new AndroidJavaClass("android.os.Environment"))
-            {
-                string dir = env.GetStatic<string>("DIRECTORY_DOWNLOADS");
-                using (var file = env.CallStatic<AndroidJavaObject>("getExternalStoragePublicDirectory", dir))
-                {
-                    return file?.Call<string>("getAbsolutePath");
-                }
-            }
-        }
     }
 }
-#endif

@@ -63,7 +63,3 @@ Packages/com.styly.device-id-provider/
 │       └── Png1x1.cs                      # Embedded PNG payload written to MediaStore
 └── package.json                           # Package metadata
 ```
-
-## License
-
-This project is distributed under the terms of the [LICENSE](LICENSE) file.

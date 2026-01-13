@@ -4,7 +4,7 @@ using System.IO;
 using System.Threading;
 using UnityEngine;
 
-namespace Styly.DeviceIdProvider
+namespace Styly.Device
 {
     /// <summary>
     /// Android implementation that persists a GUID as a shared PNG in MediaStore so that it survives app reinstalls.

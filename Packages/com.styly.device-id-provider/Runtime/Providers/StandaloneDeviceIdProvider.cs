@@ -3,7 +3,7 @@ using System;
 using System.IO;
 using UnityEngine;
 
-namespace Styly.DeviceIdProvider
+namespace Styly.Device
 {
     /// <summary>
     /// Windows, macOS and Editor implementation using an application data file.

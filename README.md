@@ -2,7 +2,7 @@
 [![openupm](https://img.shields.io/npm/v/com.styly.device-id-provider?label=openupm&registry_uri=https://package.openupm.com)](https://openupm.com/packages/com.styly.device-id-provider/)
 
 
-Device ID Provider is a Unity sample project that demonstrates how to obtain a stable, pseudo-anonymous GUID for the current device by using the [`Styly.DeviceIdProvider`](Packages/com.styly.device-id-provider/Runtime/DeviceIdProvider.cs) runtime package. The project includes a small scene that prints the resolved identifier at startup and provides reference implementations for Android, Windows, and macOS.
+Device ID Provider is a Unity sample project that demonstrates how to obtain a stable, pseudo-anonymous GUID for the current device by using the [`Styly.Device`](Packages/com.styly.device-id-provider/Runtime/DeviceIdProvider.cs) runtime package. The project includes a small scene that prints the resolved identifier at startup and provides reference implementations for Android, Windows, and macOS.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ Device ID Provider is a Unity sample project that demonstrates how to obtain a s
 3. The `GetDeviceID` MonoBehaviour resolves the GUID and prints it to the UI text element at startup:
 
 ```csharp
-using Styly.DeviceIdProvider;
+using Styly.Device;
 ...
 void Start()
 {

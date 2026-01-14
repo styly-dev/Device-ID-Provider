@@ -4,7 +4,7 @@ using System.IO;
 using System.Threading;
 using UnityEngine;
 
-namespace Styly.DeviceIdProvider
+namespace Styly.Device
 {
     /// <summary>
     /// Android implementation that persists a GUID as a shared PNG in MediaStore so that it survives app reinstalls.
@@ -181,7 +181,12 @@ namespace Styly.DeviceIdProvider
             bool needsPending = sdk >= 29 && sdk <= 30; // Android 10-11
 
             if (needsPending)
-                values.Call("put", "is_pending", 1);
+            {
+                using (var one = new AndroidJavaObject("java.lang.Integer", 1))
+                {
+                    values.Call("put", "is_pending", one);
+                }
+            }
 
             AndroidJavaObject uri = null;
             try
@@ -199,11 +204,14 @@ namespace Styly.DeviceIdProvider
 
                 if (needsPending)
                 {
-                    var cv = new AndroidJavaObject("android.content.ContentValues");
-                    cv.Call("put", "is_pending", 0);
-                    int updated = resolver.Call<int>("update", uri, cv, null, null);
-                    if (updated <= 0)
-                        Debug.LogWarning("[DeviceIdProvider] Failed to clear IS_PENDING on created image");
+                    using (var cv = new AndroidJavaObject("android.content.ContentValues"))
+                    using (var zero = new AndroidJavaObject("java.lang.Integer", 0))
+                    {
+                        cv.Call("put", "is_pending", zero);
+                        int updated = resolver.Call<int>("update", uri, cv, null, null);
+                        if (updated <= 0)
+                            Debug.LogWarning("[DeviceIdProvider] Failed to clear IS_PENDING on created image");
+                    }
                 }
             }
             catch

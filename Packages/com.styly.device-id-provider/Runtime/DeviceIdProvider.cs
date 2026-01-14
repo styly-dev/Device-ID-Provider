@@ -2,7 +2,7 @@
 using System;
 using System.Text.RegularExpressions;
 
-namespace Styly.DeviceIdProvider
+namespace Styly.Device
 {
     /// <summary>
     /// Public entry point to get a stable device identifier.

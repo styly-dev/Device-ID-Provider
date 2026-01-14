@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace Styly.DeviceIdProvider
+namespace Styly.Device
 {
     internal static class AndroidBridge
     {

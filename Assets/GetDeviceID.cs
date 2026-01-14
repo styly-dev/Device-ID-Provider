@@ -1,4 +1,4 @@
-using Styly.DeviceIdProvider;
+using Styly.Device;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;

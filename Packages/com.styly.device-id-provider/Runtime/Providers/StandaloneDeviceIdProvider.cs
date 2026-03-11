@@ -15,7 +15,22 @@ namespace Styly.Device
         private const string DeviceIdFileName = "device.id";
         private static readonly object FileLock = new object();
 
-        public string GetDeviceID()
+        public void GetDeviceID(Action<string> onSuccess, Action<Exception> onError)
+        {
+            try
+            {
+                onSuccess(ResolveDeviceId());
+            }
+            catch (Exception ex)
+            {
+                if (onError != null)
+                    onError(ex);
+                else
+                    Debug.LogError($"[DeviceIdProvider] {ex}");
+            }
+        }
+
+        private string ResolveDeviceId()
         {
             lock (FileLock)
             {

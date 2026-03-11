@@ -1,25 +1,21 @@
 using Styly.Device;
-using System.Collections;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
 
 public class GetDeviceID : MonoBehaviour
 {
-    [SerializeField] 
+    [SerializeField]
     private Text text = null;
-    
-    private bool isProcessing = false;
-    
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
+
     void Start()
     {
-        text.text = DeviceIdProvider.GetDeviceID();
-    }
-    // Update is called once per frame
-    void Update()
-    {
-        
+        text.text = "Retrieving Device ID...";
+        DeviceIdProvider.GetDeviceID(
+            onSuccess: id => text.text = id,
+            onError: ex =>
+            {
+                Debug.LogError($"[GetDeviceID] Failed to get device ID: {ex}");
+                text.text = $"Error: {ex.Message}";
+            });
     }
 }

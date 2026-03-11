@@ -6,25 +6,36 @@ namespace Styly.Device
 {
     /// <summary>
     /// Public entry point to get a stable device identifier.
-    /// Not a partial class. Delegates to a platform-specific provider.
+    /// Delegates to a platform-specific provider.
     /// </summary>
     public static class DeviceIdProvider
     {
         private static readonly IDeviceIdProvider s_impl = CreateImpl();
 
         /// <summary>
-        /// Returns a stable GUID for the current execution platform.
+        /// Retrieves a stable GUID for the current execution platform.
+        /// On Android, this will request permissions if needed without blocking the main thread,
+        /// then invoke <paramref name="onSuccess"/> with the device ID.
+        /// On other platforms, <paramref name="onSuccess"/> is called synchronously.
         /// </summary>
-        public static string GetDeviceID()
+        /// <param name="onSuccess">Called with the device ID string when retrieval succeeds.</param>
+        /// <param name="onError">Called with the exception if retrieval fails. If null, errors are logged via Debug.LogError.</param>
+        public static void GetDeviceID(Action<string> onSuccess, Action<Exception> onError = null)
         {
             if (s_impl == null)
-                throw new PlatformNotSupportedException("DeviceIdProvider is not supported on this platform.");
-            return s_impl.GetDeviceID();
+            {
+                var ex = new PlatformNotSupportedException("DeviceIdProvider is not supported on this platform.");
+                if (onError != null)
+                    onError(ex);
+                else
+                    UnityEngine.Debug.LogError($"[DeviceIdProvider] {ex}");
+                return;
+            }
+            s_impl.GetDeviceID(onSuccess, onError);
         }
 
         private static IDeviceIdProvider CreateImpl()
         {
-            // Choose provider at runtime using Application.platform to avoid platform #if branching.
             var p = UnityEngine.Application.platform;
             switch (p)
             {
@@ -43,7 +54,7 @@ namespace Styly.Device
 
     internal interface IDeviceIdProvider
     {
-        string GetDeviceID();
+        void GetDeviceID(Action<string> onSuccess, Action<Exception> onError);
     }
 
     internal static class DeviceIdRegexes

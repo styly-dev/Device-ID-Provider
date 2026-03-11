@@ -21,9 +21,9 @@ Device ID Provider is a Unity sample project that demonstrates how to obtain a s
 ```csharp
 using Styly.Device;
 ...
-void Start()
+async void Start()
 {
-    text.text = DeviceIdProvider.GetDeviceID();
+    text.text = await DeviceIdProvider.GetDeviceIDAsync();
 }
 ```
 
@@ -38,7 +38,7 @@ The runtime package selects a platform-specific implementation at runtime based 
 - Runtime permissions:
   - API level ≤ 32: requests `READ_EXTERNAL_STORAGE`.
   - API level ≥ 33: requests `READ_MEDIA_IMAGES`.
-  The call blocks until the permission is granted (with a timeout) and throws `UnauthorizedAccessException` if the user denies it.
+  Use `GetDeviceIDAsync()` on first launch so the app stays responsive while the system permission dialog is visible. The async call times out if the dialog is left open too long and throws `UnauthorizedAccessException` if the user denies it.
 
 ### Windows and macOS
 

@@ -5,9 +5,13 @@ namespace Styly.Device
 {
     internal sealed class UnsupportedDeviceIdProvider : IDeviceIdProvider
     {
-        public string GetDeviceID()
+        public void GetDeviceID(Action<string> onSuccess, Action<Exception> onError)
         {
-            throw new PlatformNotSupportedException("DeviceIdProvider.GetDeviceID is not yet supported on this platform.");
+            var ex = new PlatformNotSupportedException("DeviceIdProvider.GetDeviceID is not yet supported on this platform.");
+            if (onError != null)
+                onError(ex);
+            else
+                UnityEngine.Debug.LogError($"[DeviceIdProvider] {ex}");
         }
     }
 }

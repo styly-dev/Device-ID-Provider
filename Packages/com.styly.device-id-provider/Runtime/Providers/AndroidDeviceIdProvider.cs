@@ -1,7 +1,6 @@
 #if UNITY_2018_4_OR_NEWER
 using System;
 using System.IO;
-using System.Threading;
 using UnityEngine;
 
 namespace Styly.Device
@@ -14,118 +13,125 @@ namespace Styly.Device
         // For MediaStore.Images RELATIVE_PATH (no leading slash, trailing slash required)
         private const string ImagesRelativePath = "Pictures/Device-ID-Provider/";
         private const string PngMime = "image/png";
-        private static readonly object AndroidLock = new object();
 
-        public string GetDeviceID()
+        public void GetDeviceID(Action<string> onSuccess, Action<Exception> onError)
         {
             if (Application.platform != RuntimePlatform.Android)
-                throw new PlatformNotSupportedException("DeviceIdProvider.GetDeviceID is supported on Android runtime only");
-
-            lock (AndroidLock)
             {
-                int sdk = AndroidBridge.GetSdkInt();
-
-                if (sdk < 29)
-                {
-                    throw new NotSupportedException("This implementation requires Android API 29+.");
-                }
-
-                EnsurePermissionsOrThrow(sdk);
-
-                try
-                {
-                    // API 29+ via MediaStore.Images
-                    var existing = MediaStore_FindOldestMatchingPng();
-                    if (existing.success)
-                        return existing.guid;
-
-                    // Not found -> create a new GUID entry
-                    var createdGuid = Guid.NewGuid().ToString("D").ToLowerInvariant();
-                    MediaStore_CreatePng(createdGuid);
-
-                    // Re-query to minimize races; converge on the oldest entry
-                    var after = MediaStore_FindOldestMatchingPng();
-                    if (after.success)
-                        return after.guid;
-
-                    throw new IOException("Failed to create and locate device ID PNG via MediaStore");
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogError($"[DeviceIdProvider] Error in GetDeviceID: {ex.GetType().Name}: {ex.Message}\n{ex}");
-                    throw;
-                }
+                InvokeError(onError, new PlatformNotSupportedException("DeviceIdProvider.GetDeviceID is supported on Android runtime only"));
+                return;
             }
-        }
 
-        private static void EnsurePermissionsOrThrow(int sdk)
-        {
+            int sdk;
             try
             {
-                if (sdk <= 32)
-                {
-                    // SDK <= 32 uses READ_EXTERNAL_STORAGE
-                    Require("android.permission.READ_EXTERNAL_STORAGE");
-                }
-                else // 33+
-                {
-                    // API 33+ uses READ_MEDIA_IMAGES
-                    if (!RequestAndWaitForPermission("android.permission.READ_MEDIA_IMAGES"))
-                    {
-                        throw new UnauthorizedAccessException("Images permission not granted");
-                    }
-                }
+                sdk = AndroidBridge.GetSdkInt();
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[DeviceIdProvider] Permission check/request failed: {ex}");
-                throw;
+                InvokeError(onError, ex);
+                return;
             }
+
+            if (sdk < 29)
+            {
+                InvokeError(onError, new NotSupportedException("This implementation requires Android API 29+."));
+                return;
+            }
+
+            string permission = GetRequiredPermission(sdk);
+
+            // If permission already granted, resolve immediately
+            if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
+            {
+                try
+                {
+                    onSuccess(ResolveDeviceId());
+                }
+                catch (Exception ex)
+                {
+                    InvokeError(onError, ex);
+                }
+                return;
+            }
+
+            // Request permission via callbacks — does NOT block the main thread
+            RequestPermission(permission,
+                onGranted: () =>
+                {
+                    try
+                    {
+                        onSuccess(ResolveDeviceId());
+                    }
+                    catch (Exception ex)
+                    {
+                        InvokeError(onError, ex);
+                    }
+                },
+                onDenied: () =>
+                {
+                    InvokeError(onError, new UnauthorizedAccessException($"Permission '{permission}' was not granted by the user."));
+                });
         }
 
-        private static void Require(string permission)
+        private static string GetRequiredPermission(int sdk)
         {
-            if (!RequestAndWaitForPermission(permission))
-                throw new UnauthorizedAccessException($"{permission} not granted");
+            if (sdk <= 32)
+                return "android.permission.READ_EXTERNAL_STORAGE";
+            else
+                return "android.permission.READ_MEDIA_IMAGES";
         }
 
         /// <summary>
-        /// If the permission is missing, request it and poll for a limited time.
-        /// Returns true if granted. If altGrantedChecker returns true, it is also treated as granted.
+        /// Requests a permission using Unity's PermissionCallbacks.
+        /// Does NOT block the main thread. Invokes onGranted or onDenied when the user responds.
         /// </summary>
-        private static bool RequestAndWaitForPermission(string permission, Func<bool> altGrantedChecker = null, int timeoutMs = 15000)
+        private static void RequestPermission(string permission, Action onGranted, Action onDenied)
+        {
+            var callbacks = new UnityEngine.Android.PermissionCallbacks();
+            callbacks.PermissionGranted += _ => onGranted();
+            callbacks.PermissionDenied += _ => onDenied();
+            callbacks.PermissionDeniedAndDontAskAgain += _ => onDenied();
+
+            UnityEngine.Android.Permission.RequestUserPermission(permission, callbacks);
+        }
+
+        private static void InvokeError(Action<Exception> onError, Exception ex)
+        {
+            if (onError != null)
+                onError(ex);
+            else
+                Debug.LogError($"[DeviceIdProvider] {ex}");
+        }
+
+        /// <summary>
+        /// Core logic: find or create the device ID PNG via MediaStore.
+        /// Must be called only after permissions are confirmed.
+        /// </summary>
+        private static string ResolveDeviceId()
         {
             try
             {
-                if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
-                    return true;
-                if (altGrantedChecker != null && altGrantedChecker())
-                    return true;
+                // API 29+ via MediaStore.Images
+                var existing = MediaStore_FindOldestMatchingPng();
+                if (existing.success)
+                    return existing.guid;
 
-                UnityEngine.Android.Permission.RequestUserPermission(permission);
+                // Not found -> create a new GUID entry
+                var createdGuid = Guid.NewGuid().ToString("D").ToLowerInvariant();
+                MediaStore_CreatePng(createdGuid);
 
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                while (sw.ElapsedMilliseconds < timeoutMs)
-                {
-                    if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
-                        return true;
-                    if (altGrantedChecker != null && altGrantedChecker())
-                        return true;
+                // Re-query to minimize races; converge on the oldest entry
+                var after = MediaStore_FindOldestMatchingPng();
+                if (after.success)
+                    return after.guid;
 
-                    Thread.Sleep(100);
-                }
-
-                // Final check
-                if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
-                    return true;
-                if (altGrantedChecker != null && altGrantedChecker())
-                    return true;
-
-                return false;
+                throw new IOException("Failed to create and locate device ID PNG via MediaStore");
             }
-            catch
+            catch (Exception ex)
             {
-                return false;
+                Debug.LogError($"[DeviceIdProvider] Error in GetDeviceID: {ex.GetType().Name}: {ex.Message}\n{ex}");
+                throw;
             }
         }
 

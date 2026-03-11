@@ -21,15 +21,17 @@ Device ID Provider is a Unity sample project that demonstrates how to obtain a s
 ```csharp
 using Styly.Device;
 ...
-async void Start()
+void Start()
 {
-    text.text = await DeviceIdProvider.GetDeviceIDAsync();
+    DeviceIdProvider.GetDeviceID(
+        onSuccess: id => text.text = id,
+        onError: ex => Debug.LogError(ex));
 }
 ```
 
 ## How GUID generation works
 
-The runtime package selects a platform-specific implementation at runtime based on `Application.platform` and exposes it through the static `DeviceIdProvider.GetDeviceID()` API. Unsupported platforms throw `PlatformNotSupportedException` to make limitations explicit.
+The runtime package selects a platform-specific implementation at runtime based on `Application.platform` and exposes it through the static `DeviceIdProvider.GetDeviceID(onSuccess, onError)` callback API. Unsupported platforms invoke `onError` with `PlatformNotSupportedException` to make limitations explicit.
 
 ### Android (API 29+)
 
@@ -38,7 +40,7 @@ The runtime package selects a platform-specific implementation at runtime based 
 - Runtime permissions:
   - API level ≤ 32: requests `READ_EXTERNAL_STORAGE`.
   - API level ≥ 33: requests `READ_MEDIA_IMAGES`.
-  Use `GetDeviceIDAsync()` on first launch so the app stays responsive while the system permission dialog is visible. The async call times out if the dialog is left open too long and throws `UnauthorizedAccessException` if the user denies it.
+  The callback API requests permission without blocking the main thread. If the user denies the permission, `onError` is invoked with `UnauthorizedAccessException`.
 
 ### Windows and macOS
 
@@ -48,7 +50,7 @@ The runtime package selects a platform-specific implementation at runtime based 
 
 ### Unsupported platforms
 
-Platforms other than those listed above (including iOS, WebGL, etc.) currently throw `PlatformNotSupportedException` when `GetDeviceID()` is called.
+Platforms other than those listed above (including iOS, WebGL, etc.) invoke `onError` with `PlatformNotSupportedException`.
 
 ## Package structure
 

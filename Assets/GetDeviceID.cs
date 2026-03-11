@@ -10,12 +10,17 @@ public class GetDeviceID : MonoBehaviour
     void Start()
     {
         text.text = "Retrieving Device ID...";
-        DeviceIdProvider.GetDeviceID(
-            onSuccess: id => text.text = id,
-            onError: ex =>
-            {
-                Debug.LogError($"[GetDeviceID] Failed to get device ID: {ex}");
-                text.text = $"Error: {ex.Message}";
-            });
+        DeviceIdProvider.GetDeviceID(OnSuccess, OnError);
+    }
+
+    private void OnSuccess(string id)
+    {
+        text.text = id;
+    }
+
+    private void OnError(System.Exception ex)
+    {
+        Debug.LogError($"[GetDeviceID] Failed to get device ID: {ex}");
+        text.text = $"Error: {ex.Message}";
     }
 }

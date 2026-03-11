@@ -128,9 +128,8 @@ namespace Styly.Device
 
                 throw new IOException("Failed to create and locate device ID PNG via MediaStore");
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.LogError($"[DeviceIdProvider] Error in GetDeviceID: {ex.GetType().Name}: {ex.Message}\n{ex}");
                 throw;
             }
         }

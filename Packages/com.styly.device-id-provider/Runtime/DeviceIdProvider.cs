@@ -22,6 +22,9 @@ namespace Styly.Device
         /// <param name="onError">Called with the exception if retrieval fails. If null, errors are logged via Debug.LogError.</param>
         public static void GetDeviceID(Action<string> onSuccess, Action<Exception> onError = null)
         {
+            if (onSuccess == null)
+                throw new ArgumentNullException(nameof(onSuccess));
+
             if (s_impl == null)
             {
                 var ex = new PlatformNotSupportedException("DeviceIdProvider is not supported on this platform.");

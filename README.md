@@ -42,7 +42,8 @@ The runtime package selects a platform-specific implementation at runtime based 
 
 ### Windows and macOS
 
-- The standalone provider writes the GUID to a text file located in the user's application data directory: `%LOCALAPPDATA%/Styly/Device-ID-Provider/device.id` on Windows and `~/Library/Application Support/Styly/Device-ID-Provider/device.id` on macOS.
+- In Windows and macOS Players, the standalone provider writes the GUID to a text file located in the user's application data directory: `%LOCALAPPDATA%/Styly/Device-ID-Provider/device.id` on Windows and `~/Library/Application Support/Styly/Device-ID-Provider/device.id` on macOS.
+- In the Unity Editor, the provider stores the GUID under an additional subdirectory derived from a stable hash of `Application.dataPath`. This isolates the device ID per project directory, ParrelSync clone, or Multiplayer Play Mode virtual player instead of sharing one Editor-wide file.
 - If those special folders are unavailable (for example in restricted environments), the provider falls back to `Application.persistentDataPath`.
 - The provider validates existing file contents and regenerates the GUID if the file is missing or corrupted.
 

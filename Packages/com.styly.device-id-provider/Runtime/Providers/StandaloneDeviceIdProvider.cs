@@ -1,6 +1,8 @@
 #if UNITY_2018_4_OR_NEWER
 using System;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using UnityEngine;
 
 namespace Styly.Device
@@ -61,9 +63,31 @@ namespace Styly.Device
                 baseDirectory = Application.persistentDataPath;
             }
 
+#if UNITY_EDITOR
+            // In the Editor, isolate each Editor instance (including ParrelSync clones) by using
+            // a subdirectory derived from a stable hash of Application.dataPath, which is unique
+            // per project/clone directory.
+            var editorHash = ComputeStableHash(Application.dataPath);
+            var directory = Path.Combine(baseDirectory, VendorFolderName, ProductFolderName, editorHash);
+#else
             var directory = Path.Combine(baseDirectory, VendorFolderName, ProductFolderName);
+#endif
             return Path.Combine(directory, DeviceIdFileName);
         }
+
+#if UNITY_EDITOR
+        private static string ComputeStableHash(string input)
+        {
+            using (var sha = SHA256.Create())
+            {
+                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));
+                var sb = new StringBuilder(16);
+                for (var i = 0; i < 8; i++)
+                    sb.Append(bytes[i].ToString("x2"));
+                return sb.ToString();
+            }
+        }
+#endif
 
         private static string TryReadGuid(string path)
         {

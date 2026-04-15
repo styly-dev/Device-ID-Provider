@@ -1,6 +1,6 @@
 {
   "name": "com.styly.device-id-provider",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "displayName": "Device ID Provider",
   "unity": "6000.0",
   "description": "Device ID Provider",

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required when reading an ID image created by another app on API 29-32. -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- Required when reading an ID image created by another app on API 33+. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Distinguishes partial photo access from authoritative full access on API 34+. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+</manifest>

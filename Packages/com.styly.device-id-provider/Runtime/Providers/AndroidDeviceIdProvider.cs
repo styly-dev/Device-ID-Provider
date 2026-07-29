@@ -7,54 +7,92 @@ using UnityEngine;
 namespace Styly.Device
 {
     /// <summary>
-    /// Android implementation that persists a GUID as a shared PNG in MediaStore so that it survives app reinstalls.
+    /// Unity wrapper around the canonical native Android Device ID implementation.
     /// </summary>
     internal sealed class AndroidDeviceIdProvider : IDeviceIdProvider
     {
-        // For MediaStore.Images RELATIVE_PATH (no leading slash, trailing slash required)
-        private const string ImagesRelativePath = "Pictures/Device-ID-Provider/";
-        private const string PngMime = "image/png";
-        private static readonly object AndroidLock = new object();
+        private const string NativeProviderClass = "com.styly.deviceid.DeviceIdProvider";
+        private const string ReadExternalStoragePermission =
+            "android.permission.READ_EXTERNAL_STORAGE";
+        private const string ReadMediaImagesPermission =
+            "android.permission.READ_MEDIA_IMAGES";
+        private const string ReadSelectedMediaPermission =
+            "android.permission.READ_MEDIA_VISUAL_USER_SELECTED";
 
         public string GetDeviceID()
         {
             if (Application.platform != RuntimePlatform.Android)
-                throw new PlatformNotSupportedException("DeviceIdProvider.GetDeviceID is supported on Android runtime only");
+                throw new PlatformNotSupportedException(
+                    "DeviceIdProvider.GetDeviceID is supported on Android runtime only");
 
-            lock (AndroidLock)
+            var sdk = AndroidBridge.GetSdkInt();
+            if (sdk < 29)
+                throw new NotSupportedException("This implementation requires Android API 29+.");
+
+            EnsurePermissionsOrThrow(sdk);
+
+            try
             {
-                int sdk = AndroidBridge.GetSdkInt();
-
-                if (sdk < 29)
+                using (var context = AndroidBridge.GetApplicationContext())
+                using (var provider = new AndroidJavaClass(NativeProviderClass))
+                using (var result = provider.CallStatic<AndroidJavaObject>("getOrCreate", context))
                 {
-                    throw new NotSupportedException("This implementation requires Android API 29+.");
+                    return ResolveResult(result);
                 }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError(
+                    $"[DeviceIdProvider] Error in GetDeviceID: {ex.GetType().Name}: {ex.Message}\n{ex}");
+                throw;
+            }
+        }
 
-                EnsurePermissionsOrThrow(sdk);
+        private static string ResolveResult(AndroidJavaObject result)
+        {
+            if (result == null)
+                throw new IOException("Native Android Device ID provider returned null.");
 
-                try
+            string status;
+            using (var statusObject = result.Call<AndroidJavaObject>("getStatus"))
+            {
+                status = statusObject?.Call<string>("name") ?? "IO_ERROR";
+            }
+
+            var diagnostic = result.Call<string>("getDiagnosticMessage") ?? string.Empty;
+            switch (status)
+            {
+                case "SUCCESS":
                 {
-                    // API 29+ via MediaStore.Images
-                    var existing = MediaStore_FindOldestMatchingPng();
-                    if (existing.success)
-                        return existing.guid;
+                    var deviceId = result.Call<string>("getDeviceId");
+                    if (string.IsNullOrEmpty(deviceId) || !DeviceIdRegexes.GuidRegex.IsMatch(deviceId))
+                        throw new IOException("Native Android Device ID provider returned an invalid GUID.");
 
-                    // Not found -> create a new GUID entry
-                    var createdGuid = Guid.NewGuid().ToString("D").ToLowerInvariant();
-                    MediaStore_CreatePng(createdGuid);
-
-                    // Re-query to minimize races; converge on the oldest entry
-                    var after = MediaStore_FindOldestMatchingPng();
-                    if (after.success)
-                        return after.guid;
-
-                    throw new IOException("Failed to create and locate device ID PNG via MediaStore");
+                    var candidateCount = result.Call<int>("getCandidateCount");
+                    if (candidateCount > 1)
+                    {
+                        Debug.LogWarning(
+                            $"[DeviceIdProvider] {diagnostic} Candidate count: {candidateCount}.");
+                    }
+                    return deviceId;
                 }
-                catch (Exception ex)
-                {
-                    Debug.LogError($"[DeviceIdProvider] Error in GetDeviceID: {ex.GetType().Name}: {ex.Message}\n{ex}");
-                    throw;
-                }
+                case "ACCESS_DENIED":
+                    throw new UnauthorizedAccessException(
+                        string.IsNullOrEmpty(diagnostic)
+                            ? "Shared image access is not granted."
+                            : diagnostic);
+                case "UNSUPPORTED_API":
+                    throw new NotSupportedException(
+                        string.IsNullOrEmpty(diagnostic)
+                            ? "This implementation requires Android API 29+."
+                            : diagnostic);
+                case "NOT_FOUND":
+                case "IO_ERROR":
+                default:
+                    throw new IOException(
+                        string.IsNullOrEmpty(diagnostic)
+                            ? $"Native Android Device ID operation failed with status {status}."
+                            : diagnostic);
             }
         }
 
@@ -62,18 +100,20 @@ namespace Styly.Device
         {
             try
             {
-                if (sdk <= 32)
+                var permission = sdk <= 32
+                    ? ReadExternalStoragePermission
+                    : ReadMediaImagesPermission;
+                var requestedPermissions = sdk >= 34
+                    ? new[] { ReadMediaImagesPermission, ReadSelectedMediaPermission }
+                    : new[] { permission };
+                if (!RequestAndWaitForPermission(
+                        permission,
+                        requestedPermissions,
+                        sdk >= 34 ? ReadSelectedMediaPermission : null,
+                        () => AndroidBridge.HasAllFilesAccess(sdk)))
                 {
-                    // SDK <= 32 uses READ_EXTERNAL_STORAGE
-                    Require("android.permission.READ_EXTERNAL_STORAGE");
-                }
-                else // 33+
-                {
-                    // API 33+ uses READ_MEDIA_IMAGES
-                    if (!RequestAndWaitForPermission("android.permission.READ_MEDIA_IMAGES"))
-                    {
-                        throw new UnauthorizedAccessException("Images permission not granted");
-                    }
+                    throw new UnauthorizedAccessException(
+                        $"{permission} full access not granted");
                 }
             }
             catch (Exception ex)
@@ -83,145 +123,46 @@ namespace Styly.Device
             }
         }
 
-        private static void Require(string permission)
-        {
-            if (!RequestAndWaitForPermission(permission))
-                throw new UnauthorizedAccessException($"{permission} not granted");
-        }
-
-        /// <summary>
-        /// If the permission is missing, request it and poll for a limited time.
-        /// Returns true if granted. If altGrantedChecker returns true, it is also treated as granted.
-        /// </summary>
-        private static bool RequestAndWaitForPermission(string permission, Func<bool> altGrantedChecker = null, int timeoutMs = 15000)
+        private static bool RequestAndWaitForPermission(
+            string requiredPermission,
+            string[] requestedPermissions,
+            string partialAccessPermission,
+            Func<bool> alternateGrantedChecker,
+            int timeoutMs = 15000)
         {
             try
             {
-                if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
+                if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(requiredPermission))
                     return true;
-                if (altGrantedChecker != null && altGrantedChecker())
+                if (alternateGrantedChecker != null && alternateGrantedChecker())
                     return true;
 
-                UnityEngine.Android.Permission.RequestUserPermission(permission);
+                UnityEngine.Android.Permission.RequestUserPermissions(requestedPermissions);
 
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                while (sw.ElapsedMilliseconds < timeoutMs)
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                while (stopwatch.ElapsedMilliseconds < timeoutMs)
                 {
-                    if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
+                    if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(
+                            requiredPermission))
                         return true;
-                    if (altGrantedChecker != null && altGrantedChecker())
+                    if (alternateGrantedChecker != null && alternateGrantedChecker())
                         return true;
-
+                    if (!string.IsNullOrEmpty(partialAccessPermission)
+                        && UnityEngine.Android.Permission.HasUserAuthorizedPermission(
+                            partialAccessPermission))
+                    {
+                        return false;
+                    }
                     Thread.Sleep(100);
                 }
 
-                // Final check
-                if (UnityEngine.Android.Permission.HasUserAuthorizedPermission(permission))
-                    return true;
-                if (altGrantedChecker != null && altGrantedChecker())
-                    return true;
-
-                return false;
+                return UnityEngine.Android.Permission.HasUserAuthorizedPermission(
+                           requiredPermission)
+                       || (alternateGrantedChecker != null && alternateGrantedChecker());
             }
             catch
             {
                 return false;
-            }
-        }
-
-        private static (bool success, string guid) MediaStore_FindOldestMatchingPng()
-        {
-            var resolver = AndroidBridge.GetContentResolver();
-            var images = AndroidBridge.GetImagesExternalContentUri();
-
-            // RELATIVE_PATH LIKE 'Pictures/Device-ID-Provider/%' AND _display_name LIKE '%.png'
-            // Sort by date_added ASC (pick the oldest)
-            string[] projection = { "_display_name" };
-            const string selection = "relative_path LIKE ? AND _display_name LIKE ?";
-            string[] selectionArgs = { ImagesRelativePath + "%", "%.png" };
-
-            using (var cursor = resolver.Call<AndroidJavaObject>("query", images, projection, selection, selectionArgs, "date_added ASC"))
-            {
-                if (cursor == null)
-                    throw new IOException("MediaStore query returned null cursor");
-
-                int idxName = AndroidBridge.CursorGetColumnIndex(cursor, "_display_name");
-
-                if (AndroidBridge.CursorMoveToFirst(cursor))
-                {
-                    do
-                    {
-                        string name = AndroidBridge.CursorGetString(cursor, idxName);
-                        if (string.IsNullOrEmpty(name)) continue;
-                        if (DeviceIdRegexes.GuidPngRegex.IsMatch(name))
-                        {
-                            string guid = name.Substring(0, name.Length - 4);
-                            return (true, guid);
-                        }
-                        // Skip PNGs that are not GUID-named
-                    } while (AndroidBridge.CursorMoveToNext(cursor));
-                }
-            }
-
-            return (false, null);
-        }
-
-        private static void MediaStore_CreatePng(string guid)
-        {
-            if (string.IsNullOrEmpty(guid)) throw new ArgumentNullException(nameof(guid));
-            var resolver = AndroidBridge.GetContentResolver();
-            var images = AndroidBridge.GetImagesExternalContentUri();
-
-            var values = new AndroidJavaObject("android.content.ContentValues");
-            values.Call("put", "_display_name", guid + ".png");
-            values.Call("put", "mime_type", PngMime);
-            values.Call("put", "relative_path", ImagesRelativePath);
-
-            int sdk = AndroidBridge.GetSdkInt();
-            bool needsPending = sdk >= 29 && sdk <= 30; // Android 10-11
-
-            if (needsPending)
-            {
-                using (var one = new AndroidJavaObject("java.lang.Integer", 1))
-                {
-                    values.Call("put", "is_pending", one);
-                }
-            }
-
-            AndroidJavaObject uri = null;
-            try
-            {
-                uri = resolver.Call<AndroidJavaObject>("insert", images, values);
-                if (uri == null) throw new IOException("ContentResolver.insert returned null Uri");
-
-                using (var os = resolver.Call<AndroidJavaObject>("openOutputStream", uri))
-                {
-                    if (os == null) throw new IOException("openOutputStream returned null");
-                    var bytes = Png1x1.Bytes;
-                    AndroidBridge.OutputStreamWrite(os, bytes, 0, bytes.Length);
-                    os.Call("flush");
-                }
-
-                if (needsPending)
-                {
-                    using (var cv = new AndroidJavaObject("android.content.ContentValues"))
-                    using (var zero = new AndroidJavaObject("java.lang.Integer", 0))
-                    {
-                        cv.Call("put", "is_pending", zero);
-                        int updated = resolver.Call<int>("update", uri, cv, null, null);
-                        if (updated <= 0)
-                            Debug.LogWarning("[DeviceIdProvider] Failed to clear IS_PENDING on created image");
-                    }
-                }
-            }
-            catch
-            {
-                // Best-effort cleanup on write failure
-                if (uri != null)
-                {
-                    try { resolver.Call<int>("delete", uri, null, null); } catch { /* ignore */ }
-                }
-                throw;
             }
         }
     }

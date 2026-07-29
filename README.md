@@ -35,15 +35,43 @@ The runtime package selects a platform-specific implementation at runtime based 
 
 - Requires Android 10 (API 29) or newer because it stores the GUID as a one-pixel PNG inside the public MediaStore. This allows the identifier to survive app reinstalls as long as the user does not remove the shared image. 
 - The image is created under `Pictures/Device-ID-Provider/` with a filename equal to the GUID plus the `.png` extension. The provider always returns the oldest matching entry to keep the identifier stable across runs.
+- The canonical MediaStore implementation is a Java Android library. The Unity C# provider is a thin JNI wrapper around the same AAR that native Android applications can consume.
+- Candidate selection uses `date_added ASC, _id ASC` so multiple valid images have a deterministic winner. MediaStore does not provide an atomic cross-process compare-and-set operation, so simultaneous first-time callers can both insert an image; the final lookup and every later lookup converge on the same published winner.
 - Runtime permissions:
   - API level ≤ 32: requests `READ_EXTERNAL_STORAGE`.
   - API level ≥ 33: requests `READ_MEDIA_IMAGES`.
-  The call blocks until the permission is granted (with a timeout) and throws `UnauthorizedAccessException` if the user denies it.
+  - API level ≥ 34: also requests `READ_MEDIA_VISUAL_USER_SELECTED` so partial photo
+    access can be distinguished from full access. Partial access is rejected because it
+    cannot establish the canonical cross-application ID.
+  The Unity wrapper blocks until the permission is granted (with a timeout) and throws `UnauthorizedAccessException` if the user denies it. The native library itself never starts an Activity or requests permission UI, so it can be called from a headless service.
+- `MANAGE_EXTERNAL_STORAGE` is also accepted when the host application already has all-files access. The library refuses to mint from a limited MediaStore view because an empty query without broad image access cannot prove that another application has not already created an ID.
+
+### Native Android library
+
+The source of truth for Android is the Gradle project under `android/`. It exposes:
+
+```java
+DeviceIdResult result = DeviceIdProvider.getOrCreate(applicationContext);
+```
+
+`DeviceIdResult` reports `SUCCESS`, `NOT_FOUND`, `ACCESS_DENIED`, `UNSUPPORTED_API`, or `IO_ERROR`, plus the selected ID and candidate count. Hosts own their permission UX and retry policy.
+
+Build and test the library with JDK 17 and an Android SDK:
+
+```bash
+./android/gradlew -p android testReleaseUnitTest
+./android/gradlew -p android :device-id-provider:syncUnityAar
+```
+
+The second command rebuilds the exact AAR committed at
+`Packages/com.styly.device-id-provider/Plugins/Android/styly-device-id-provider.aar`.
+The same release component can be installed into the local Maven repository with
+`:device-id-provider:publishReleasePublicationToMavenLocal`. Configure a destination repository
+in the Gradle publishing block before publishing it remotely.
 
 ### Windows and macOS
 
-- In Windows and macOS Players, the standalone provider writes the GUID to a text file located in the user's application data directory: `%LOCALAPPDATA%/Styly/Device-ID-Provider/device.id` on Windows and `~/Library/Application Support/Styly/Device-ID-Provider/device.id` on macOS.
-- In the Unity Editor, the provider stores the GUID under an additional subdirectory derived from a stable hash of `Application.dataPath`. This isolates the device ID per project directory, ParrelSync clone, or Multiplayer Play Mode virtual player instead of sharing one Editor-wide file.
+- The standalone provider writes the GUID to a text file located in the user's application data directory: `%LOCALAPPDATA%/Styly/Device-ID-Provider/device.id` on Windows and `~/Library/Application Support/Styly/Device-ID-Provider/device.id` on macOS.
 - If those special folders are unavailable (for example in restricted environments), the provider falls back to `Application.persistentDataPath`.
 - The provider validates existing file contents and regenerates the GUID if the file is missing or corrupted.
 
@@ -55,14 +83,18 @@ Platforms other than those listed above (including iOS, WebGL, etc.) currently t
 
 ```
 Packages/com.styly.device-id-provider/
+├── Plugins/Android/
+│   └── styly-device-id-provider.aar       # Native Android implementation used by Unity
 ├── Runtime/
 │   ├── DeviceIdProvider.cs                # Entry point that chooses the implementation at runtime
 │   ├── Providers/
-│   │   ├── AndroidDeviceIdProvider.cs     # MediaStore-based persistence for Android
+│   │   ├── AndroidDeviceIdProvider.cs     # Thin Unity JNI wrapper for the Android AAR
 │   │   ├── StandaloneDeviceIdProvider.cs  # File-based persistence for Windows/macOS
 │   │   └── UnsupportedDeviceIdProvider.cs # Throws on other platforms
 │   └── Internal/
-│       ├── AndroidBridge.cs               # Unity <-> AndroidJavaObject helpers
-│       └── Png1x1.cs                      # Embedded PNG payload written to MediaStore
+│       └── AndroidBridge.cs               # Minimal Unity <-> Android JNI helpers
 └── package.json                           # Package metadata
 ```
+
+The native Android source, tests, AAR build, and Maven publication configuration live in
+`android/device-id-provider/`.

@@ -1,0 +1,272 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stable version number (for example, 0.4.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: develop
+  MAIN_BRANCH: main
+  PACKAGE_FILE: Packages/com.styly.device-id-provider/package.json
+  GRADLE_PROPERTIES_FILE: android/gradle.properties
+  AAR_FILE: Packages/com.styly.device-id-provider/Plugins/Android/styly-device-id-provider.aar
+
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      base_commit: ${{ steps.validate.outputs.base_commit }}
+      current_version: ${{ steps.validate.outputs.current_version }}
+      version: ${{ steps.validate.outputs.version }}
+      tag_name: ${{ steps.validate.outputs.tag_name }}
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release
+        id: validate
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${INPUT_VERSION#[vV]}"
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Error: version must be a stable semantic version such as 0.4.0"
+            exit 1
+          fi
+
+          PACKAGE_VERSION="$(jq -er '.version | select(type == "string" and length > 0)' "$PACKAGE_FILE")"
+          GRADLE_VERSION="$(sed -n 's/^VERSION_NAME=//p' "$GRADLE_PROPERTIES_FILE")"
+          if [[ -z "$GRADLE_VERSION" || "$PACKAGE_VERSION" != "$GRADLE_VERSION" ]]; then
+            echo "Error: package and Android versions do not match"
+            echo "  package: $PACKAGE_VERSION"
+            echo "  Android: $GRADLE_VERSION"
+            exit 1
+          fi
+
+          IFS=. read -r CURRENT_MAJOR CURRENT_MINOR CURRENT_PATCH <<< "$PACKAGE_VERSION"
+          IFS=. read -r TARGET_MAJOR TARGET_MINOR TARGET_PATCH <<< "$VERSION"
+          if (( TARGET_MAJOR < CURRENT_MAJOR ||
+                (TARGET_MAJOR == CURRENT_MAJOR && TARGET_MINOR < CURRENT_MINOR) ||
+                (TARGET_MAJOR == CURRENT_MAJOR && TARGET_MINOR == CURRENT_MINOR && TARGET_PATCH <= CURRENT_PATCH) )); then
+            echo "Error: target version $VERSION must be greater than $PACKAGE_VERSION"
+            exit 1
+          fi
+
+          TAG_NAME="v$VERSION"
+          if git show-ref --verify --quiet "refs/tags/$TAG_NAME"; then
+            echo "Error: tag $TAG_NAME already exists"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "origin/$MAIN_BRANCH" "origin/$RELEASE_BRANCH"; then
+            echo "Error: $MAIN_BRANCH cannot be fast-forwarded to $RELEASE_BRANCH"
+            exit 1
+          fi
+
+          printf 'base_commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          printf 'current_version=%s\n' "$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'tag_name=%s\n' "$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Update versions
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          jq --arg version "$VERSION" '.version = $version' "$PACKAGE_FILE" > "$RUNNER_TEMP/package.json"
+          mv "$RUNNER_TEMP/package.json" "$PACKAGE_FILE"
+
+          sed "s/^VERSION_NAME=.*/VERSION_NAME=$VERSION/" "$GRADLE_PROPERTIES_FILE" \
+            > "$RUNNER_TEMP/gradle.properties"
+          mv "$RUNNER_TEMP/gradle.properties" "$GRADLE_PROPERTIES_FILE"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Test and build Android library
+        run: |
+          set -euo pipefail
+
+          EXPECTED_WRAPPER_JAR_SHA256=498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17
+          ACTUAL_WRAPPER_JAR_SHA256="$(sha256sum android/gradle/wrapper/gradle-wrapper.jar | awk '{print $1}')"
+          if [[ "$ACTUAL_WRAPPER_JAR_SHA256" != "$EXPECTED_WRAPPER_JAR_SHA256" ]]; then
+            echo "Error: Gradle wrapper JAR checksum mismatch"
+            exit 1
+          fi
+
+          chmod +x android/gradlew
+          ./android/gradlew -p android --no-daemon \
+            :device-id-provider:testReleaseUnitTest \
+            :device-id-provider:syncUnityAar
+
+      - name: Verify release files
+        run: |
+          set -euo pipefail
+
+          test -s "$AAR_FILE"
+          unzip -t "$AAR_FILE" >/dev/null
+          unzip -Z1 "$AAR_FILE" | grep -Fxq -- classes.jar
+          git diff --check
+
+      - name: Stage release files
+        run: |
+          set -euo pipefail
+
+          ARTIFACT_ROOT="$RUNNER_TEMP/release-files"
+          for FILE in "$PACKAGE_FILE" "$GRADLE_PROPERTIES_FILE" "$AAR_FILE"; do
+            mkdir -p "$ARTIFACT_ROOT/$(dirname "$FILE")"
+            cp -- "$FILE" "$ARTIFACT_ROOT/$FILE"
+          done
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: ${{ runner.temp }}/release-files
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-release:
+    needs: validate-and-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download release files
+        uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: release-files
+
+      - name: Verify repository state
+        env:
+          BASE_COMMIT: ${{ needs.validate-and-build.outputs.base_commit }}
+          TAG_NAME: ${{ needs.validate-and-build.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$(git rev-parse HEAD)" != "$BASE_COMMIT" ]]; then
+            echo "Error: $RELEASE_BRANCH changed during the build"
+            exit 1
+          fi
+          if git show-ref --verify --quiet "refs/tags/$TAG_NAME"; then
+            echo "Error: tag $TAG_NAME already exists"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "origin/$MAIN_BRANCH" "$BASE_COMMIT"; then
+            echo "Error: $MAIN_BRANCH can no longer be fast-forwarded"
+            exit 1
+          fi
+
+      - name: Apply and verify release files
+        env:
+          VERSION: ${{ needs.validate-and-build.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          for FILE in "$PACKAGE_FILE" "$GRADLE_PROPERTIES_FILE" "$AAR_FILE"; do
+            SOURCE="release-files/$FILE"
+            if [[ ! -f "$SOURCE" || -L "$SOURCE" ]]; then
+              echo "Error: invalid release file: $SOURCE"
+              exit 1
+            fi
+            cp -- "$SOURCE" "$FILE"
+          done
+
+          PACKAGE_VERSION="$(jq -er '.version' "$PACKAGE_FILE")"
+          GRADLE_VERSION="$(sed -n 's/^VERSION_NAME=//p' "$GRADLE_PROPERTIES_FILE")"
+          if [[ "$PACKAGE_VERSION" != "$VERSION" || "$GRADLE_VERSION" != "$VERSION" ]]; then
+            echo "Error: release files do not contain version $VERSION"
+            exit 1
+          fi
+          test -s "$AAR_FILE"
+          unzip -t "$AAR_FILE" >/dev/null
+          unzip -Z1 "$AAR_FILE" | grep -Fxq -- classes.jar
+          git diff --check
+
+      - name: Commit release
+        env:
+          CURRENT_VERSION: ${{ needs.validate-and-build.outputs.current_version }}
+          VERSION: ${{ needs.validate-and-build.outputs.version }}
+          TAG_NAME: ${{ needs.validate-and-build.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          git config user.name github-actions[bot]
+          git config user.email github-actions[bot]@users.noreply.github.com
+          git add "$PACKAGE_FILE" "$GRADLE_PROPERTIES_FILE" "$AAR_FILE"
+          if git diff --staged --quiet; then
+            echo "Error: no release changes to commit"
+            exit 1
+          fi
+          git -c core.hooksPath=/dev/null commit -m "Bump version from $CURRENT_VERSION to $VERSION"
+          git tag "$TAG_NAME"
+
+      - name: Publish commit and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.validate-and-build.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          AUTH_TOKEN="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$AUTH_TOKEN"
+          git -c "http.extraheader=AUTHORIZATION: basic $AUTH_TOKEN" push --atomic origin \
+            "HEAD:refs/heads/$RELEASE_BRANCH" \
+            "HEAD:refs/heads/$MAIN_BRANCH" \
+            "refs/tags/$TAG_NAME"
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.validate-and-build.outputs.tag_name }}
+        run: gh release create "$TAG_NAME" --draft --title "$TAG_NAME" --generate-notes --verify-tag
+
+      - name: Summary
+        if: always()
+        env:
+          CURRENT_VERSION: ${{ needs.validate-and-build.outputs.current_version }}
+          VERSION: ${{ needs.validate-and-build.outputs.version }}
+          TAG_NAME: ${{ needs.validate-and-build.outputs.tag_name }}
+        run: |
+          {
+            echo '# Release workflow summary'
+            echo
+            echo "Status: ${{ job.status }}"
+            echo "Version: ${CURRENT_VERSION:-unknown} -> ${VERSION:-unknown}"
+            echo "Tag: ${TAG_NAME:-unknown}"
+            if [[ "${{ job.status }}" != success ]]; then
+              echo
+              echo 'This workflow does not resume partial releases automatically.'
+              echo 'Inspect the remote branches, tag, and draft release before retrying.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

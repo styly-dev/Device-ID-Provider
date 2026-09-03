@@ -18,6 +18,7 @@ namespace Styly.Device
             "android.permission.READ_MEDIA_IMAGES";
         private const string ReadSelectedMediaPermission =
             "android.permission.READ_MEDIA_VISUAL_USER_SELECTED";
+        private static readonly object AndroidLock = new object();
 
         public string GetDeviceID()
         {
@@ -25,26 +26,29 @@ namespace Styly.Device
                 throw new PlatformNotSupportedException(
                     "DeviceIdProvider.GetDeviceID is supported on Android runtime only");
 
-            var sdk = AndroidBridge.GetSdkInt();
-            if (sdk < 29)
-                throw new NotSupportedException("This implementation requires Android API 29+.");
-
-            EnsurePermissionsOrThrow(sdk);
-
-            try
+            lock (AndroidLock)
             {
-                using (var context = AndroidBridge.GetApplicationContext())
-                using (var provider = new AndroidJavaClass(NativeProviderClass))
-                using (var result = provider.CallStatic<AndroidJavaObject>("getOrCreate", context))
+                var sdk = AndroidBridge.GetSdkInt();
+                if (sdk < 29)
+                    throw new NotSupportedException("This implementation requires Android API 29+.");
+
+                EnsurePermissionsOrThrow(sdk);
+
+                try
                 {
-                    return ResolveResult(result);
+                    using (var context = AndroidBridge.GetApplicationContext())
+                    using (var provider = new AndroidJavaClass(NativeProviderClass))
+                    using (var result = provider.CallStatic<AndroidJavaObject>("getOrCreate", context))
+                    {
+                        return ResolveResult(result);
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError(
-                    $"[DeviceIdProvider] Error in GetDeviceID: {ex.GetType().Name}: {ex.Message}\n{ex}");
-                throw;
+                catch (Exception ex)
+                {
+                    Debug.LogError(
+                        $"[DeviceIdProvider] Error in GetDeviceID: {ex.GetType().Name}: {ex.Message}\n{ex}");
+                    throw;
+                }
             }
         }
 
@@ -109,7 +113,6 @@ namespace Styly.Device
                 if (!RequestAndWaitForPermission(
                         permission,
                         requestedPermissions,
-                        sdk >= 34 ? ReadSelectedMediaPermission : null,
                         () => AndroidBridge.HasAllFilesAccess(sdk)))
                 {
                     throw new UnauthorizedAccessException(
@@ -126,7 +129,6 @@ namespace Styly.Device
         private static bool RequestAndWaitForPermission(
             string requiredPermission,
             string[] requestedPermissions,
-            string partialAccessPermission,
             Func<bool> alternateGrantedChecker,
             int timeoutMs = 15000)
         {
@@ -147,12 +149,6 @@ namespace Styly.Device
                         return true;
                     if (alternateGrantedChecker != null && alternateGrantedChecker())
                         return true;
-                    if (!string.IsNullOrEmpty(partialAccessPermission)
-                        && UnityEngine.Android.Permission.HasUserAuthorizedPermission(
-                            partialAccessPermission))
-                    {
-                        return false;
-                    }
                     Thread.Sleep(100);
                 }
 

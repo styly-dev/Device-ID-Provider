@@ -73,7 +73,11 @@ final class MediaStoreRepository {
         values.put(MediaStore.Images.Media.MIME_TYPE, PNG_MIME_TYPE);
         values.put(MediaStore.Images.Media.RELATIVE_PATH, IMAGES_RELATIVE_PATH);
 
-        values.put(MediaStore.Images.Media.IS_PENDING, 1);
+        boolean needsPending = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                && Build.VERSION.SDK_INT <= Build.VERSION_CODES.R;
+        if (needsPending) {
+            values.put(MediaStore.Images.Media.IS_PENDING, 1);
+        }
 
         Uri createdUri = null;
         try {
@@ -90,12 +94,13 @@ final class MediaStoreRepository {
                 stream.flush();
             }
 
-            ContentValues published = new ContentValues();
-            published.put(MediaStore.Images.Media.IS_PENDING, 0);
-            int updated = resolver.update(createdUri, published, null, null);
-            if (updated != 1) {
-                throw new IOException(
-                        "Expected to publish one device ID image, but updated " + updated + ".");
+            if (needsPending) {
+                ContentValues published = new ContentValues();
+                published.put(MediaStore.Images.Media.IS_PENDING, 0);
+                int updated = resolver.update(createdUri, published, null, null);
+                if (updated <= 0) {
+                    Log.w(TAG, "Failed to clear IS_PENDING on created image");
+                }
             }
             return createdUri;
         } catch (IOException | RuntimeException error) {

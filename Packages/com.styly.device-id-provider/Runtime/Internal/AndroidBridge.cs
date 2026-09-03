@@ -1,4 +1,3 @@
-using System;
 using UnityEngine;
 
 namespace Styly.Device
@@ -7,27 +6,9 @@ namespace Styly.Device
     {
         public static int GetSdkInt()
         {
-            using (var ver = new AndroidJavaClass("android.os.Build$VERSION"))
+            using (var version = new AndroidJavaClass("android.os.Build$VERSION"))
             {
-                return ver.GetStatic<int>("SDK_INT");
-            }
-        }
-
-        public static int GetTargetSdkInt()
-        {
-            try
-            {
-                using (var activity = GetActivity())
-                using (var appInfo = activity.Call<AndroidJavaObject>("getApplicationInfo"))
-                {
-                    // android.content.pm.ApplicationInfo.targetSdkVersion
-                    return appInfo.Get<int>("targetSdkVersion");
-                }
-            }
-            catch (Exception)
-            {
-                // Fallback: assume current device SDK (best effort)
-                return GetSdkInt();
+                return version.GetStatic<int>("SDK_INT");
             }
         }
 
@@ -39,45 +20,23 @@ namespace Styly.Device
             }
         }
 
-        public static AndroidJavaObject GetContentResolver()
+        public static AndroidJavaObject GetApplicationContext()
         {
             using (var activity = GetActivity())
             {
-                return activity.Call<AndroidJavaObject>("getContentResolver");
+                return activity.Call<AndroidJavaObject>("getApplicationContext");
             }
         }
 
-        public static AndroidJavaObject GetImagesExternalContentUri()
+        public static bool HasAllFilesAccess(int sdk)
         {
-            using (var media = new AndroidJavaClass("android.provider.MediaStore$Images$Media"))
+            if (sdk < 30)
+                return false;
+
+            using (var environment = new AndroidJavaClass("android.os.Environment"))
             {
-                return media.GetStatic<AndroidJavaObject>("EXTERNAL_CONTENT_URI");
+                return environment.CallStatic<bool>("isExternalStorageManager");
             }
-        }
-
-        public static int CursorGetColumnIndex(AndroidJavaObject cursor, string name)
-        {
-            return cursor.Call<int>("getColumnIndex", name);
-        }
-
-        public static bool CursorMoveToFirst(AndroidJavaObject cursor)
-        {
-            return cursor.Call<bool>("moveToFirst");
-        }
-
-        public static bool CursorMoveToNext(AndroidJavaObject cursor)
-        {
-            return cursor.Call<bool>("moveToNext");
-        }
-
-        public static string CursorGetString(AndroidJavaObject cursor, int index)
-        {
-            return cursor.Call<string>("getString", index);
-        }
-
-        public static void OutputStreamWrite(AndroidJavaObject outputStream, byte[] buffer, int offset, int length)
-        {
-            outputStream.Call("write", buffer, offset, length);
         }
     }
 }

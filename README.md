@@ -27,6 +27,15 @@ void Start()
 }
 ```
 
+## Installation
+
+Install the [OpenUPM CLI](https://github.com/openupm/openupm-cli), then run the following command from your Unity project directory:
+
+```bash
+npm install -g openupm-cli
+openupm add com.styly.device-id-provider
+```
+
 ## How GUID generation works
 
 The runtime package selects a platform-specific implementation at runtime based on `Application.platform` and exposes it through the static `DeviceIdProvider.GetDeviceID()` API. Unsupported platforms throw `PlatformNotSupportedException` to make limitations explicit.

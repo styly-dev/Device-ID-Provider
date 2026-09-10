@@ -67,8 +67,6 @@ final class AsyncDeviceIdRequest {
             finish(null, error);
         } catch (RuntimeException error) {
             finish(null, error);
-        } finally {
-            timer.shutdown();
         }
     }
 

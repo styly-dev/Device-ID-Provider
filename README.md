@@ -65,6 +65,63 @@ DeviceIdResult result = DeviceIdProvider.getOrCreate(applicationContext);
 
 `DeviceIdResult` reports `SUCCESS`, `NOT_FOUND`, `ACCESS_DENIED`, `UNSUPPORTED_API`, or `IO_ERROR`, plus the selected ID and candidate count. Hosts own their permission UX and retry policy.
 
+#### Optional asynchronous API for native Android hosts
+
+The Unity C# API and its synchronous behavior remain unchanged. Native Android
+hosts that run during device boot can instead use:
+
+```java
+CompletableFuture<DeviceIdResult> request = DeviceIdProvider.getOrCreateAsync(
+        applicationContext, 30_000L, 250L); // Example timeout and retry delay, in milliseconds.
+request.thenAcceptAsync(result -> {
+    if (result.getStatus() == DeviceIdStatus.SUCCESS) {
+        useDeviceId(result.getDeviceId());
+    } else {
+        handleProviderFailure(result);
+    }
+}, applicationContext.getMainExecutor());
+// Also handle exceptional completion (TimeoutException or unexpected setup failure).
+// When the owning operation ends:
+// request.cancel(false);
+```
+
+Both durations must be positive. The request registers a mount observer before
+its first readiness check. It checks broad image access, mount state, and a
+read-only query against the primary MediaStore volume before calling the existing
+`getOrCreate`. A mounted filesystem alone does not imply that MediaStore is ready.
+API 30+ uses `StorageVolumeCallback`; API 29 uses `ACTION_MEDIA_MOUNTED`.
+
+Storage that is not mounted, or the known Android `external_primary` volume-not-found /
+currently-unavailable error before any mint attempt, is retried until the deadline.
+Notifications can trigger a recheck before the retry timer. Repeated notifications
+are coalesced; one request never runs overlapping lookups. The existing native
+process lock still serializes `getOrCreate` across requests. General I/O errors,
+permission denial, unsupported APIs, and failures after a mint attempt are terminal
+`DeviceIdResult` values; permission UI is never opened. The Android volume error
+mapping is deliberately exact because there is no public typed exception for it;
+unrecognized errors remain terminal rather than being retried speculatively.
+
+Timeout completes the future exceptionally with `TimeoutException`, independently
+of an in-flight lookup. Cancellation stops observation and future attempts, but
+neither cancellation nor timeout can interrupt an already-started lookup attempt,
+undo a created ID, or establish that no write occurred. An in-flight attempt may
+still reach its write step after cancellation. Late results are discarded.
+Observers and scheduling resources are released on completion, cancellation, or
+failure; an in-flight worker exits after its operation returns. Use async completion
+handlers with an explicit executor for UI work and never block the main thread with
+`get()` or `join()`. Keep the returned future for observation/cancellation; do not
+manually complete it.
+
+This API waits for volume accessibility, not completion of every background media
+scan. Existing candidate selection and mint semantics are unchanged. A successful
+Provider result, not a mount callback, establishes that an ID was obtained.
+
+The instrumented existing-ID test requires image-read access and a pre-existing
+marker; it skips when that precondition is absent. Run the denied-access test with
+permissions revoked and the existing-ID test with permissions granted, and check
+instrumentation status to distinguish passes from skips. The test APK targets
+API 34 independently of the consuming application's target SDK.
+
 Build and test the library with JDK 17 and an Android SDK:
 
 ```bash

@@ -31,6 +31,8 @@ extensions.configure<LibraryExtension> {
     }
 
     testOptions {
+        // Test APK only: exercise modern MediaStore permissions without changing host targets.
+        targetSdk = 34
         unitTests.isIncludeAndroidResources = false
     }
 

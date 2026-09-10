@@ -3,7 +3,6 @@ package com.styly.deviceid;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assume.assumeTrue;
-import java.util.concurrent.TimeUnit;
 
 import android.content.Context;
 
@@ -12,6 +11,8 @@ import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
+import java.util.concurrent.TimeUnit;
 
 @RunWith(AndroidJUnit4.class)
 public final class DeviceIdProviderInstrumentedTest {
@@ -27,6 +28,7 @@ public final class DeviceIdProviderInstrumentedTest {
         assertEquals(DeviceIdStatus.ACCESS_DENIED, result.getStatus());
         assertFalse(result.wasMintAttempted());
     }
+
     @Test
     public void getOrCreateAsync_deniedAccessIsTerminalWithoutMinting() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -48,5 +50,4 @@ public final class DeviceIdProviderInstrumentedTest {
         assertEquals(existing.getDeviceId(), result.getDeviceId());
         assertFalse(result.wasMintAttempted());
     }
-
 }

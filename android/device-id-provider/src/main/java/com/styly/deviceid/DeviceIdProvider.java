@@ -28,9 +28,10 @@ public final class DeviceIdProvider {
      * The future completes exceptionally with java.util.concurrent.TimeoutException on timeout;
      * permission and non-transient provider failures are returned as DeviceIdResult values.
      *
-     * <p>cancel() stops observation and future attempts. It does not interrupt an already-started
-     * MediaStore operation or undo a created ID. Completion may run on a background thread; use
-     * thenAcceptAsync with the desired executor for UI work. Unity's synchronous API is unchanged.
+     * <p>cancel() stops future attempts and removes observation after any already-started storage
+     * operation returns. It does not interrupt that operation or undo a created ID. Completion may
+     * run on a background thread; use thenAcceptAsync with the desired executor for UI work.
+     * Unity's synchronous API is unchanged.
      */
     public static CompletableFuture<DeviceIdResult> getOrCreateAsync(
             Context context, long timeoutMillis, long retryDelayMillis) {
@@ -95,6 +96,10 @@ public final class DeviceIdProvider {
      * candidates remain.</p>
      */
     public static DeviceIdResult getOrCreate(Context context) {
+        return getOrCreate(context, error -> { });
+    }
+
+    static DeviceIdResult getOrCreate(Context context, FailureListener failureListener) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             return DeviceIdResult.failure(
                     DeviceIdStatus.UNSUPPORTED_API,
@@ -146,11 +151,13 @@ public final class DeviceIdProvider {
                         resolved.candidateCount,
                         true);
             } catch (SecurityException error) {
+                failureListener.onFailure(error);
                 return DeviceIdResult.failure(
                         DeviceIdStatus.ACCESS_DENIED,
                         mintAttempted,
                         message(error));
             } catch (IOException | RuntimeException error) {
+                failureListener.onFailure(error);
                 return DeviceIdResult.failure(
                         DeviceIdStatus.IO_ERROR,
                         mintAttempted,
@@ -171,10 +178,14 @@ public final class DeviceIdProvider {
         return new MediaStoreRepository(context.getContentResolver());
     }
 
-    private static String message(Throwable error) {
+    static String message(Throwable error) {
         String detail = error.getMessage();
         return detail == null || detail.isEmpty()
                 ? error.getClass().getSimpleName()
                 : error.getClass().getSimpleName() + ": " + detail;
+    }
+
+    interface FailureListener {
+        void onFailure(Throwable error);
     }
 }

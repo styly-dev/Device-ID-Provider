@@ -85,42 +85,17 @@ request.thenAcceptAsync(result -> {
 // request.cancel(false);
 ```
 
-Both durations must be positive. The request registers a mount observer before
-its first readiness check. It checks broad image access, mount state, and a
-read-only query against the primary MediaStore volume before calling the existing
-`getOrCreate`. A mounted filesystem alone does not imply that MediaStore is ready.
-API 30+ uses `StorageVolumeCallback`; API 29 uses `ACTION_MEDIA_MOUNTED`.
+- Both durations must be positive. Register the mount observer before checking current state (API 30+: `StorageVolumeCallback`; API 29: `ACTION_MEDIA_MOUNTED`).
+- Check broad image access, filesystem mount state, and a read-only primary-volume query before calling `getOrCreate`. A mount callback alone does not establish readiness.
+- Retry unmounted storage and `IllegalArgumentException` from the fixed readiness probe or a lookup before minting, until the deadline. This is a bounded retry policy, not proof of an unmounted volume; no diagnostic-string matching is used. Notifications can trigger an earlier retry; lookups never overlap within a request.
+- Permission denial, unsupported APIs, other I/O errors, and failures after a mint attempt are terminal. The library never opens permission UI.
+- Timeout completes exceptionally with `TimeoutException`, retaining the last retryable exception as its cause when available; cancellation stops future attempts. Neither waits for a blocked observer registration, lookup, or observer removal.
+- Cleanup is asynchronous. A registration that finishes after termination is also removed; blocked platform operations must return before their resources can be released.
+- An already-started lookup is not interrupted and may still create an ID after timeout/cancellation. Late results are discarded; cancellation does not prove that no write occurred.
+- Use completion handlers with an explicit executor. Do not block the main thread with `get()` / `join()` or manually complete the returned future.
+- This API waits for volume accessibility, not every background media scan. Existing candidate selection and mint semantics are unchanged; only `SUCCESS` establishes that an ID was obtained.
 
-Storage that is not mounted, or the known Android `external_primary` volume-not-found /
-currently-unavailable error before any mint attempt, is retried until the deadline.
-Notifications can trigger a recheck before the retry timer. Repeated notifications
-are coalesced; one request never runs overlapping lookups. The existing native
-process lock still serializes `getOrCreate` across requests. General I/O errors,
-permission denial, unsupported APIs, and failures after a mint attempt are terminal
-`DeviceIdResult` values; permission UI is never opened. The Android volume error
-mapping is deliberately exact because there is no public typed exception for it;
-unrecognized errors remain terminal rather than being retried speculatively.
-
-Timeout completes the future exceptionally with `TimeoutException`, independently
-of an in-flight lookup. Cancellation stops observation and future attempts, but
-neither cancellation nor timeout can interrupt an already-started lookup attempt,
-undo a created ID, or establish that no write occurred. An in-flight attempt may
-still reach its write step after cancellation. Late results are discarded.
-Observers and scheduling resources are released on completion, cancellation, or
-failure; an in-flight worker exits after its operation returns. Use async completion
-handlers with an explicit executor for UI work and never block the main thread with
-`get()` or `join()`. Keep the returned future for observation/cancellation; do not
-manually complete it.
-
-This API waits for volume accessibility, not completion of every background media
-scan. Existing candidate selection and mint semantics are unchanged. A successful
-Provider result, not a mount callback, establishes that an ID was obtained.
-
-The instrumented existing-ID test requires image-read access and a pre-existing
-marker; it skips when that precondition is absent. Run the denied-access test with
-permissions revoked and the existing-ID test with permissions granted, and check
-instrumentation status to distinguish passes from skips. The test APK targets
-API 34 independently of the consuming application's target SDK.
+The instrumented existing-ID test requires broad image access and an existing marker; otherwise it skips. Run it with permissions granted and the denied-access test with permissions revoked, checking raw instrumentation status for skips. The test APK targets API 34 independently of consuming applications. Boot-cycle verification must call this native API during real device startup; a warm instrumented pass is insufficient.
 
 Build and test the library with JDK 17 and an Android SDK:
 

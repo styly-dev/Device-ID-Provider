@@ -10,11 +10,15 @@ import android.os.Environment;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
 import android.provider.MediaStore;
+import android.util.Log;
 
 /** Storage readiness is checked under the same UID that will resolve the device ID. */
 final class AndroidAsyncDeviceIdBackend implements AsyncDeviceIdRequest.Backend {
+    private static final String TAG = "StylyDeviceId";
+
     private final Context context;
     private Runnable unregister;
+    private volatile Throwable lastRetryCause;
 
     AndroidAsyncDeviceIdBackend(Context context) {
         this.context = context;
@@ -72,30 +76,37 @@ final class AndroidAsyncDeviceIdBackend implements AsyncDeviceIdRequest.Backend 
                             "MediaStore readiness query returned a null cursor.");
                 }
                 cursor.getCount();
+            } catch (IllegalArgumentException notReady) {
+                // This fixed read-only probe uses a bounded retry policy for provider readiness.
+                lastRetryCause = notReady;
+                return null;
             }
-            DeviceIdResult value = DeviceIdProvider.getOrCreate(context);
+            Throwable[] failure = new Throwable[1];
+            DeviceIdResult value = DeviceIdProvider.getOrCreate(
+                    context, error -> failure[0] = error);
             // A volume can detach between the readiness probe and the actual lookup.
-            return isRetryable(value) ? null : value;
+            if (isRetryable(value, failure[0])) {
+                lastRetryCause = failure[0];
+                return null;
+            }
+            return value;
         } catch (SecurityException error) {
-            return DeviceIdResult.failure(DeviceIdStatus.ACCESS_DENIED, false, describe(error));
+            return DeviceIdResult.failure(
+                    DeviceIdStatus.ACCESS_DENIED, false, DeviceIdProvider.message(error));
         } catch (RuntimeException error) {
-            DeviceIdResult value = DeviceIdResult.failure(DeviceIdStatus.IO_ERROR, false, describe(error));
-            return isRetryable(value) ? null : value;
+            return DeviceIdResult.failure(
+                    DeviceIdStatus.IO_ERROR, false, DeviceIdProvider.message(error));
         }
     }
 
-    static boolean isRetryable(DeviceIdResult value) {
-        // Android exposes this condition as IllegalArgumentException, not a public typed error.
-        // Keep the compatibility mapping exact; other I/O failures must not be retried blindly.
+    static boolean isRetryable(DeviceIdResult value, Throwable failure) {
         return value.getStatus() == DeviceIdStatus.IO_ERROR && !value.wasMintAttempted()
-                && ("IllegalArgumentException: Volume external_primary not found".equals(
-                        value.getDiagnosticMessage())
-                || "IllegalArgumentException: Volume external_primary currently unavailable".equals(
-                        value.getDiagnosticMessage()));
+                && failure instanceof IllegalArgumentException;
     }
 
-    private static String describe(RuntimeException error) {
-        return error.getClass().getSimpleName() + ": " + error.getMessage();
+    @Override
+    public Throwable lastRetryCause() {
+        return lastRetryCause;
     }
 
     @Override
@@ -103,7 +114,11 @@ final class AndroidAsyncDeviceIdBackend implements AsyncDeviceIdRequest.Backend 
         if (unregister != null) {
             Runnable cleanup = unregister;
             unregister = null;
-            cleanup.run();
+            try {
+                cleanup.run();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Failed to remove storage readiness observer.", error);
+            }
         }
     }
 }

@@ -85,13 +85,12 @@ request.thenAcceptAsync(result -> {
 // request.cancel(false);
 ```
 
-- Both durations must be positive. Register the mount observer before checking current state (API 30+: `StorageVolumeCallback`; API 29: `ACTION_MEDIA_MOUNTED`).
-- Check broad image access, filesystem mount state, and a read-only primary-volume query before calling `getOrCreate`. A mount callback alone does not establish readiness.
-- Retry unmounted storage and `IllegalArgumentException` from the fixed readiness probe or a lookup before minting, until the deadline. This is a bounded retry policy, not proof of an unmounted volume; no diagnostic-string matching is used. Notifications can trigger an earlier retry; lookups never overlap within a request.
-- Permission denial, unsupported APIs, other I/O errors, and failures after a mint attempt are terminal. The library never opens permission UI.
-- Timeout completes exceptionally with `TimeoutException`, retaining the last retryable exception as its cause when available; cancellation stops future attempts. Neither waits for a blocked observer registration, lookup, or observer removal.
-- Cleanup is asynchronous. A registration that finishes after termination is also removed; blocked platform operations must return before their resources can be released.
-- An already-started lookup is not interrupted and may still create an ID after timeout/cancellation. Late results are discarded; cancellation does not prove that no write occurred.
+- Both durations must be positive. Poll broad image access, mount state and a read-only primary-volume query at the requested retry interval; no mount observer is registered.
+- Unmounted storage and `IllegalArgumentException` from the fixed readiness probe are retried until the deadline. A mounted filesystem alone does not establish MediaStore readiness.
+- Once the probe succeeds, call the existing `getOrCreate` once and return its result, including `IO_ERROR`. A later volume detach is not retried internally; hosts may start another request.
+- Permission denial, unsupported APIs and other probe failures are terminal. The library never opens permission UI.
+- An independent timer completes the future with `TimeoutException` even when lookup blocks. Its cause retains the latest readiness exception or unmounted state.
+- Cancellation stops future attempts and wakes the retry wait. Neither timeout nor cancellation interrupts an already-started lookup, undoes a created ID, or proves that no write occurred. Late results are discarded; a blocked worker exits when its operation returns.
 - Use completion handlers with an explicit executor. Do not block the main thread with `get()` / `join()` or manually complete the returned future.
 - This API waits for volume accessibility, not every background media scan. Existing candidate selection and mint semantics are unchanged; only `SUCCESS` establishes that an ID was obtained.
 

@@ -128,6 +128,28 @@ public final class AsyncDeviceIdRequestTest {
         assertTrue(calls.get() >= 2);
     }
 
+    @Test
+    public void start_timesOutEvenWhenRetryDiagnosticsThrow() throws Exception {
+        AsyncDeviceIdRequest.Backend backend = new AsyncDeviceIdRequest.Backend() {
+            @Override
+            public DeviceIdResult lookup() {
+                return null;
+            }
+
+            @Override
+            public Throwable lastRetryCause() {
+                throw new IllegalStateException("Diagnostics failed");
+            }
+        };
+        CompletableFuture<DeviceIdResult> future = new AsyncDeviceIdRequest(backend, 10).start(100);
+
+        try {
+            assertTrue(failureOf(future) instanceof TimeoutException);
+        } finally {
+            future.cancel(false);
+        }
+    }
+
     private static void verifyBlockedLookup(boolean cancel) throws Exception {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);

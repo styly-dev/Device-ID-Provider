@@ -38,7 +38,11 @@ final class AsyncDeviceIdRequest {
         timer.schedule(() -> {
             TimeoutException timeout = new TimeoutException(
                     "Device ID lookup did not complete within the requested timeout");
-            timeout.initCause(backend.lastRetryCause());
+            try {
+                timeout.initCause(backend.lastRetryCause());
+            } catch (RuntimeException ignored) {
+                // Diagnostics must never cost the deadline guarantee.
+            }
             finish(null, timeout);
         }, timeoutMillis, TimeUnit.MILLISECONDS);
         new Thread(this::poll, "device-id-lookup").start();

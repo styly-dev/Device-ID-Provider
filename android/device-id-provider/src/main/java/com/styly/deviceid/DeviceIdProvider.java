@@ -7,6 +7,7 @@ import android.util.Log;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Native Android implementation of the shared STYLY Device ID contract.
@@ -19,6 +20,27 @@ public final class DeviceIdProvider {
     private static final Object PROCESS_LOCK = new Object();
 
     private DeviceIdProvider() {
+    }
+
+    /**
+     * Resolves an ID off the calling thread, waiting for primary storage and MediaStore readiness.
+     * Both durations must be positive milliseconds. The timeout includes waiting and lookup work.
+     * The future completes exceptionally with java.util.concurrent.TimeoutException on timeout;
+     * permission and non-transient provider failures are returned as DeviceIdResult values.
+     *
+     * <p>cancel() stops future attempts. It does not interrupt an already-started storage operation
+     * or undo a created ID. Completion may run on a background thread; use thenAcceptAsync with
+     * the desired executor for UI work.
+     * Unity's synchronous API is unchanged.
+     */
+    public static CompletableFuture<DeviceIdResult> getOrCreateAsync(
+            Context context, long timeoutMillis, long retryDelayMillis) {
+        if (timeoutMillis <= 0 || retryDelayMillis <= 0) {
+            throw new IllegalArgumentException("Timeout and retry delay must be positive.");
+        }
+        Context safeContext = applicationContext(context);
+        return new AsyncDeviceIdRequest(new AndroidAsyncDeviceIdBackend(safeContext), retryDelayMillis)
+                .start(timeoutMillis);
     }
 
     /**

@@ -65,6 +65,37 @@ DeviceIdResult result = DeviceIdProvider.getOrCreate(applicationContext);
 
 `DeviceIdResult` reports `SUCCESS`, `NOT_FOUND`, `ACCESS_DENIED`, `UNSUPPORTED_API`, or `IO_ERROR`, plus the selected ID and candidate count. Hosts own their permission UX and retry policy.
 
+#### Optional asynchronous API for native Android hosts
+
+The Unity C# API and its synchronous behavior remain unchanged. Native Android
+hosts that run during device boot can instead use:
+
+```java
+CompletableFuture<DeviceIdResult> request = DeviceIdProvider.getOrCreateAsync(
+        applicationContext, 30_000L, 250L); // Example timeout and retry delay, in milliseconds.
+request.thenAcceptAsync(result -> {
+    if (result.getStatus() == DeviceIdStatus.SUCCESS) {
+        useDeviceId(result.getDeviceId());
+    } else {
+        handleProviderFailure(result);
+    }
+}, applicationContext.getMainExecutor());
+// Also handle exceptional completion (TimeoutException or unexpected setup failure).
+// When the owning operation ends:
+// request.cancel(false);
+```
+
+- Both durations must be positive. Poll broad image access, mount state and a read-only primary-volume query at the requested retry interval; no mount observer is registered.
+- Unmounted storage and `IllegalArgumentException` from the fixed readiness probe are retried until the deadline. A mounted filesystem alone does not establish MediaStore readiness.
+- Once the probe succeeds, call the existing `getOrCreate` once and return its result, including `IO_ERROR`. A later volume detach is not retried internally; hosts may start another request.
+- Permission denial, unsupported APIs and other probe failures are terminal. The library never opens permission UI.
+- An independent timer completes the future with `TimeoutException` even when lookup blocks. Its cause retains the latest readiness exception or unmounted state.
+- Cancellation stops future attempts and wakes the retry wait. Neither timeout nor cancellation interrupts an already-started lookup, undoes a created ID, or proves that no write occurred. Late results are discarded; a blocked worker exits when its operation returns.
+- Use completion handlers with an explicit executor. Do not block the main thread with `get()` / `join()` or manually complete the returned future.
+- This API waits for volume accessibility, not every background media scan. Existing candidate selection and mint semantics are unchanged; only `SUCCESS` establishes that an ID was obtained.
+
+The instrumented existing-ID test requires broad image access and an existing marker; otherwise it skips. Run it with permissions granted and the denied-access test with permissions revoked, checking raw instrumentation status for skips. The test APK targets API 34 independently of consuming applications. Boot-cycle verification must call this native API during real device startup; a warm instrumented pass is insufficient.
+
 Build and test the library with JDK 17 and an Android SDK:
 
 ```bash

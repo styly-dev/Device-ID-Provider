@@ -304,7 +304,7 @@ jobs:
     needs: [validate-and-build, publish-release]
     permissions:
       contents: write
-    uses: styly-dev/STYLY-NetSync/.github/workflows/sign-upm-package.yml@6c6e83ba45361dcded0e6885edfb7c61afccc554
+    uses: styly-dev/STYLY-NetSync/.github/workflows/sign-upm-package.yml@a721211f0bbe93506af160c1156c3869414cc79f
     with:
       package-path: Packages/com.styly.device-id-provider
       release-commit: ${{ needs.publish-release.outputs.release_commit }}

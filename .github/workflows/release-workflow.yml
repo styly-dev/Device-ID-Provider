@@ -38,6 +38,26 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Check signing configuration
+        env:
+          UPM_SERVICE_ACCOUNT_KEY_ID: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_ID }}
+          UPM_SERVICE_ACCOUNT_KEY_SECRET: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_SECRET }}
+          UPM_ORG_ID: ${{ secrets.UPM_ORG_ID }}
+        run: |
+          set -euo pipefail
+          for NAME in UPM_SERVICE_ACCOUNT_KEY_ID UPM_SERVICE_ACCOUNT_KEY_SECRET UPM_ORG_ID; do
+            if [[ -z "${!NAME}" ]]; then
+              echo "Error: missing repository secret: $NAME"
+              exit 1
+            fi
+          done
+          curl -fsSL https://raw.githubusercontent.com/openupm/openupm/master/data/packages/com.styly.device-id-provider.yml \
+            -o "$RUNNER_TEMP/openupm.yml"
+          if ! grep -Eq '^trackingMode: githubRelease[[:space:]]*$' "$RUNNER_TEMP/openupm.yml"; then
+            echo 'Error: merge the OpenUPM githubRelease metadata migration before releasing'
+            exit 1
+          fi
+
       - name: Validate release
         id: validate
         env:
@@ -152,6 +172,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      release_commit: ${{ steps.release.outputs.release_commit }}
 
     steps:
       - name: Checkout develop
@@ -245,11 +267,17 @@ jobs:
             "HEAD:refs/heads/$MAIN_BRANCH" \
             "refs/tags/$TAG_NAME"
 
+      - name: Record release source
+        id: release
+        run: printf 'release_commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Create draft GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ needs.validate-and-build.outputs.tag_name }}
-        run: gh release create "$TAG_NAME" --draft --title "$TAG_NAME" --generate-notes --verify-tag
+        run: |
+          gh release create "$TAG_NAME" --draft --title "$TAG_NAME" --generate-notes \
+            --verify-tag --target "$(git rev-parse HEAD)"
 
       - name: Summary
         if: always()
@@ -264,9 +292,24 @@ jobs:
             echo "Status: ${{ job.status }}"
             echo "Version: ${CURRENT_VERSION:-unknown} -> ${VERSION:-unknown}"
             echo "Tag: ${TAG_NAME:-unknown}"
+            echo 'Wait for the sign-release job to succeed before publishing the draft.'
             if [[ "${{ job.status }}" != success ]]; then
               echo
               echo 'This workflow does not resume partial releases automatically.'
               echo 'Inspect the remote branches, tag, and draft release before retrying.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  sign-release:
+    needs: [validate-and-build, publish-release]
+    permissions:
+      contents: write
+    uses: styly-dev/STYLY-NetSync/.github/workflows/sign-upm-package.yml@6c6e83ba45361dcded0e6885edfb7c61afccc554
+    with:
+      package-path: Packages/com.styly.device-id-provider
+      release-commit: ${{ needs.publish-release.outputs.release_commit }}
+      release-tag: ${{ needs.validate-and-build.outputs.tag_name }}
+    secrets:
+      UPM_SERVICE_ACCOUNT_KEY_ID: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_ID }}
+      UPM_SERVICE_ACCOUNT_KEY_SECRET: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_SECRET }}
+      UPM_ORG_ID: ${{ secrets.UPM_ORG_ID }}
